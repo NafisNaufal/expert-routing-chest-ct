@@ -204,6 +204,8 @@ def parse_args():
     p.add_argument("--output_root", default="~/icsdg_data/processed")
     p.add_argument("--hf_token", default=None)
     p.add_argument("--max_volumes", type=int, default=2000)
+    p.add_argument("--workers", type=int, default=8,
+                   help="Parallel volume downloads (network-bound; 8 is safe)")
     p.add_argument("--max_slices", type=int, default=16)
     p.add_argument("--slice_size", type=int, default=224)
     p.add_argument("--holdout_fraction", type=float, default=0.10)
@@ -223,23 +225,29 @@ def main():
     report_index = load_report_index(ctrate_root)
     metadata_index = load_metadata_index(ctrate_root)
 
-    from huggingface_hub import HfFileSystem
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from huggingface_hub import hf_hub_download
+
     token = args.hf_token or os.environ.get("HF_TOKEN")
-    fs = HfFileSystem(token=token)
+    # hf_transfer = Rust-based multi-connection downloader; big speedup if present.
+    try:
+        import hf_transfer  # noqa: F401
+        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+        print("hf_transfer enabled (fast downloads)")
+    except ImportError:
+        print("hf_transfer not installed — `pip install hf_transfer` for faster "
+              "downloads")
 
-    # Derive HF volume paths directly from report-index keys. A recursive
-    # `fs.glob("train/**/*.nii.gz")` over ~50k files hangs for many minutes;
-    # CT-RATE's layout is fully predictable from the volume name:
+    # Derive repo-relative volume paths from report-index keys. A recursive
+    # glob over ~50k files hangs for minutes; CT-RATE's layout is predictable:
     #   dataset/train/train_X/train_X_Y/train_X_Y_Z.nii.gz
-    base = f"datasets/{REPO_ID}/dataset"
-
     def hf_path_for(volume_id: str):
         parts = volume_id.split("_")
         if len(parts) < 4 or parts[0] != "train":
             return None
         f1 = "_".join(parts[:2])          # train_X
         f2 = "_".join(parts[:3])          # train_X_Y
-        return f"{base}/train/{f1}/{f2}/{volume_id}.nii.gz"
+        return f"dataset/train/{f1}/{f2}/{volume_id}.nii.gz"
 
     all_volumes = [p for p in (hf_path_for(v) for v in sorted(report_index))
                    if p is not None]
@@ -252,40 +260,43 @@ def main():
     print(f"Selected {len(all_volumes)} volumes "
           f"({len(all_volumes) - n_holdout} train / {n_holdout} holdout)")
 
+    def fetch_and_process(rel_path: str):
+        """Download one volume to a private temp dir, slice it, delete the raw."""
+        volume_id = _norm_id(Path(rel_path).name)
+        report_text = report_index.get(volume_id)
+        if report_text is None:
+            return None
+        findings = extract_findings(report_text)
+        slope, intercept = metadata_index.get(volume_id, (1.0, 0.0))
+
+        task_tmp = Path(tempfile.mkdtemp(prefix="ctv_"))
+        try:
+            local = hf_hub_download(
+                repo_id=REPO_ID, repo_type="dataset", filename=rel_path,
+                token=token, cache_dir=str(task_tmp))
+            slice_paths = process_volume(
+                Path(local), slope, intercept, args.max_slices,
+                slices_dir, volume_id, args.slice_size)
+        except Exception as e:
+            print(f"  Warning: skipping {volume_id}: {e}")
+            return None
+        finally:
+            shutil.rmtree(task_tmp, ignore_errors=True)
+
+        if rel_path in holdout_set:
+            return "holdout", make_retrieval_record(volume_id, slice_paths, findings)
+        return "train", make_detection_record(volume_id, slice_paths, findings)
+
     train_records, holdout_records = [], []
-    tmp_dir = Path(tempfile.mkdtemp(prefix="ctrate_stream_"))
-
-    try:
-        for hf_path in tqdm(all_volumes, desc="Streaming volumes"):
-            volume_id = _norm_id(Path(hf_path).name)
-
-            report_text = report_index.get(volume_id)
-            if report_text is None:
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futures = [ex.submit(fetch_and_process, p) for p in all_volumes]
+        for fut in tqdm(as_completed(futures), total=len(futures),
+                        desc="Streaming volumes"):
+            result = fut.result()
+            if result is None:
                 continue
-            findings = extract_findings(report_text)
-            slope, intercept = metadata_index.get(volume_id, (1.0, 0.0))
-
-            tmp_file = tmp_dir / f"{volume_id}.nii.gz"
-            try:
-                with fs.open(hf_path, "rb") as src, open(tmp_file, "wb") as out:
-                    shutil.copyfileobj(src, out)
-                slice_paths = process_volume(
-                    tmp_file, slope, intercept, args.max_slices,
-                    slices_dir, volume_id, args.slice_size)
-            except Exception as e:
-                print(f"  Warning: skipping {volume_id}: {e}")
-                continue
-            finally:
-                tmp_file.unlink(missing_ok=True)
-
-            if hf_path in holdout_set:
-                holdout_records.append(
-                    make_retrieval_record(volume_id, slice_paths, findings))
-            else:
-                train_records.append(
-                    make_detection_record(volume_id, slice_paths, findings))
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+            kind, rec = result
+            (holdout_records if kind == "holdout" else train_records).append(rec)
 
     train_out = output_root / "ctrate_train.json"
     holdout_out = output_root / "ctrate_holdout.json"

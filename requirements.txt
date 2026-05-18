@@ -34,6 +34,7 @@ deepspeed==0.14.4
 # s2wrapper: required by llava's vision encoder (VILA git dependency).
 s2wrapper @ git+https://github.com/bfshi/scaling_on_scales
 huggingface_hub==0.20.3
+hf_transfer>=0.1.6        # fast multi-connection downloads for CT-RATE streaming
 datasets==2.16.1
 
 # --- numerics (numpy must stay <2 for transformers 4.37.2) ---
