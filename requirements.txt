@@ -49,6 +49,7 @@ nibabel==5.2.1
 pydicom==2.4.4
 pylidc==0.2.3
 SimpleITK==2.3.1
+tcia_utils>=2.0.0          # LIDC-IDRI download from TCIA
 
 # --- retrieval ---
 faiss-cpu==1.8.0
