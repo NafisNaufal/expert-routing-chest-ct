@@ -19,7 +19,7 @@ CT-RATE (fine-tuning)          LIDC-IDRI (zero-shot eval)
   VILA-M3 8B                      (via MONAI agent)
        │                                │
   Retrieval eval               Detection eval
-  Recall@1/5/10                IoU + mAP
+  Recall@1/5/10                Dice + IoU
 ```
 
 The core idea: use VILA-M3 as an orchestrator that routes spatial localisation
@@ -32,9 +32,10 @@ without requiring bounding box annotations.
 ## Requirements
 
 - Python 3.10
-- CUDA 12.2
-- 3× NVIDIA L40 (48 GB VRAM) or equivalent
-- ~2.2 TB free disk space (5,000 CT-RATE volumes + LIDC-IDRI)
+- 1× NVIDIA A100 80 GB
+- NVIDIA driver 470.x / CUDA 11.6 host → **PyTorch cu118 build** (cu12x needs driver ≥ 525)
+- ~241 GB disk is enough — the data pipeline streams CT-RATE volumes one at a
+  time and deletes the raw volume after slicing (the full set is ~21 TB).
 
 ---
 
@@ -45,90 +46,91 @@ without requiring bounding box annotations.
 git clone <your-repo-url>
 cd icsdg
 
-# Clone VILA-M3 alongside (required for MONAI agent framework)
+# Get the VILA-M3 framework + its VILA submodule (inside the repo)
 git clone https://github.com/Project-MONAI/VLM-Radiology-Agent-Framework \
-    --recursive ../VLM-Radiology-Agent-Framework
+    --recursive ./VLM-Radiology-Agent-Framework
 
-# Install dependencies and configure environment
+# Create the conda env, install the pinned cu118 stack, patch transformers
 bash setup.sh
-source ~/projects/icsdg_venv/bin/activate
+conda activate icsdg
+
+# Point the HF cache at the data disk (not the home partition)
+export ICSDG_DATA_ROOT=$HOME/icsdg_data
+export HF_HOME=$ICSDG_DATA_ROOT/hf_cache
 ```
 
 ---
 
 ## Run Order
 
-### 1. Download datasets
+All paths below assume `ICSDG_DATA_ROOT=$HOME/icsdg_data` (see Setup). CT-RATE
+is gated — accept the terms on HuggingFace and `export HF_TOKEN=...` first.
 
-Start both in separate terminal panes — they run independently and take time.
+### 1. Download dataset metadata + LIDC
 
 ```bash
-# CT-RATE (HuggingFace: https://huggingface.co/datasets/ibrahimhamamci/CT-RATE)
-# Downloads 5,000 volumes (~2 TB). Set HF_TOKEN env var first.
 export HF_TOKEN=your_token_here
-python src/data/download_ctrate.py --output /data/ct_rate --max_volumes 5000
 
-# LIDC-IDRI (~125 GB, TCIA: https://www.cancerimagingarchive.net/collection/lidc-idri/)
-# Option A: automated via tcia_utils
-python src/data/download_lidc.py --output /data/lidc_idri
+# CT-RATE: only the small report/metadata CSVs — volumes are streamed in step 2
+python src/data/download_ctrate.py --output $ICSDG_DATA_ROOT/ct_rate
 
-# Option B: if you already downloaded via the NBIA Data Retriever manually
-python src/data/download_lidc.py \
-    --output /data/lidc_idri \
-    --dicom_home /path/to/your/dicoms \
-    --skip_download
+# LIDC-IDRI: capped DICOM download (~220 series, then ~150 used)
+python src/data/download_lidc.py --output $ICSDG_DATA_ROOT/lidc_idri --max_series 220
+
+# (or, if you already have DICOMs from the NBIA Data Retriever)
+python src/data/download_lidc.py --output $ICSDG_DATA_ROOT/lidc_idri \
+    --dicom_home /path/to/your/dicoms --skip_download
 ```
 
 ### 2. Preprocess
 
 ```bash
-# CT-RATE → instruction pairs + key axial slices
+# CT-RATE: stream ~2,000 volumes, slice each, delete the raw volume
 python src/data/prepare_ctrate.py \
-    --ctrate_root /data/ct_rate \
-    --output_root /data/processed
+    --ctrate_root $ICSDG_DATA_ROOT/ct_rate \
+    --output_root $ICSDG_DATA_ROOT/processed \
+    --max_volumes 2000
 
-# LIDC-IDRI → eval records + key axial slices
+# LIDC-IDRI: DICOM → NIfTI volumes + consensus masks + key slices
 python src/data/prepare_lidc.py \
-    --lidc_root /data/lidc_idri \
-    --output_root /data/processed
+    --lidc_root $ICSDG_DATA_ROOT/lidc_idri \
+    --output_root $ICSDG_DATA_ROOT/processed \
+    --max_scans 150
 ```
 
 ### 3. Evaluate baseline (pre fine-tuning)
 
 ```bash
 python src/eval/eval_retrieval.py \
-    --model_path MONAI/Llama3-VILA-M3-8B \
+    --holdout_json $ICSDG_DATA_ROOT/processed/ctrate_holdout.json \
     --output_json results/baseline_retrieval.json
 
 python src/eval/eval_detection.py \
-    --model_path MONAI/Llama3-VILA-M3-8B \
-    --vila_repo ../VLM-Radiology-Agent-Framework \
+    --eval_json $ICSDG_DATA_ROOT/processed/lidc_eval.json \
+    --condition baseline \
     --output_json results/baseline_detection.json
 ```
 
-### 4. Fine-tune
+### 4. Fine-tune (single A100)
 
 ```bash
-# Single GPU
-python src/train/finetune_lora.py --config configs/train_config.yaml
-
-# Multi-GPU (all 3 L40s)
-torchrun --nproc_per_node=3 src/train/finetune_lora.py \
-    --config configs/train_config.yaml
+python src/train/finetune_lora.py \
+    --config configs/train_config.yaml \
+    --data_path $ICSDG_DATA_ROOT/processed/ctrate_train.json
 ```
 
 ### 5. Evaluate fine-tuned model
 
 ```bash
 python src/eval/eval_retrieval.py \
-    --model_path ./checkpoints/lora_adapter_final \
-    --is_lora_adapter \
+    --holdout_json $ICSDG_DATA_ROOT/processed/ctrate_holdout.json \
+    --lora_adapter ./checkpoints/lora_adapter_final \
     --output_json results/finetuned_retrieval.json
 
 python src/eval/eval_detection.py \
-    --model_path MONAI/Llama3-VILA-M3-8B \
+    --eval_json $ICSDG_DATA_ROOT/processed/lidc_eval.json \
+    --condition finetuned \
     --lora_adapter ./checkpoints/lora_adapter_final \
-    --vila_repo ../VLM-Radiology-Agent-Framework \
     --output_json results/finetuned_detection.json
 ```
 

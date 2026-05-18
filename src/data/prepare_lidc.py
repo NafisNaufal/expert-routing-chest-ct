@@ -1,27 +1,27 @@
 """
 prepare_lidc.py
 ---------------
-Converts LIDC-IDRI DICOM scans into NIfTI volumes and extracts key axial slices
-in the same format used for CT-RATE, ready for zero-shot detection evaluation.
+Converts LIDC-IDRI scans into NIfTI volumes + consensus segmentation masks and
+extracts key axial slices, ready for zero-shot detection evaluation.
 
-Reads:  /data/lidc_idri/nodule_annotations.json  (written by download_lidc.py)
-Writes: /data/processed/lidc_eval.json            (evaluation records)
-        /data/processed/slices/lidc_*/             (key axial slices)
+The volume and the consensus mask are both built from pylidc's `to_volume()`
+voxel grid, so they are guaranteed to share the same shape and orientation —
+VISTA3D runs on the NIfTI volume and its output mask can be compared to the
+consensus mask directly (Dice / IoU) without resampling guesswork.
 
-Each evaluation record:
-    {
-        "id": str,
-        "volume_id": str,
-        "images": [<slice_path>, ...],
-        "gt_boxes_ijk": [[z0,y0,x0, z1,y1,x1], ...],   # from LIDC consensus
-        "conversations": [{...}]                          # detection prompt only
-    }
+Reads:  <lidc_root>/nodule_annotations.json   (from download_lidc.py)
+Writes: <lidc_root>/nifti/<volume_id>.nii.gz   (full-res CT for VISTA3D)
+        <output_root>/masks/<volume_id>_gt.nii.gz   (consensus mask)
+        <output_root>/slices/<volume_id>_NN.png     (key axial slices)
+        <output_root>/lidc_eval.json                (evaluation records)
+
+A voxel is positive in the consensus mask if >=3 of 4 radiologists contoured it.
 
 Usage:
     python src/data/prepare_lidc.py \
-        --lidc_root /data/lidc_idri \
-        --output_root /data/processed \
-        --max_slices 16
+        --lidc_root ~/icsdg_data/lidc_idri \
+        --output_root ~/icsdg_data/processed \
+        --max_scans 150
 """
 
 import argparse
@@ -33,7 +33,15 @@ from PIL import Image
 from tqdm import tqdm
 
 
-# ── Slice utilities (same as prepare_ctrate.py) ───────────────────────────────
+def _numpy_compat():
+    """pylidc references numpy aliases removed in numpy >= 1.24."""
+    for alias, builtin in [("int", int), ("bool", bool),
+                           ("float", float), ("complex", complex)]:
+        if not hasattr(np, alias):
+            setattr(np, alias, builtin)
+
+
+# ── Slice utilities ───────────────────────────────────────────────────────────
 
 def window_ct(vol: np.ndarray, wl: float = -600, ww: float = 1500) -> np.ndarray:
     lo, hi = wl - ww / 2, wl + ww / 2
@@ -41,136 +49,54 @@ def window_ct(vol: np.ndarray, wl: float = -600, ww: float = 1500) -> np.ndarray
     return ((vol - lo) / (hi - lo) * 255).astype(np.uint8)
 
 
-def sample_key_slices(vol: np.ndarray, n: int) -> tuple[list[np.ndarray], list[int]]:
-    """Return (slices, sampled_z_indices) skipping top/bottom 10%."""
-    z = vol.shape[0]
+def sample_key_slices(vol_zhw: np.ndarray, n: int):
+    z = vol_zhw.shape[0]
     margin = max(1, int(z * 0.10))
     indices = np.linspace(margin, z - margin - 1, n, dtype=int)
-    return [vol[i] for i in indices], indices.tolist()
+    return [vol_zhw[i] for i in indices], indices.tolist()
 
 
-def save_slices(
-    slices: list[np.ndarray],
-    out_dir: Path,
-    volume_id: str,
-    target_size: int = 224,
-) -> list[str]:
-    out_dir.mkdir(parents=True, exist_ok=True)
+def save_slices(slices, slices_dir: Path, volume_id: str, size: int) -> list:
+    slices_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for i, sl in enumerate(slices):
-        img = Image.fromarray(sl).convert("RGB")
-        img = img.resize((target_size, target_size), Image.BILINEAR)
-        rel = f"slices/{volume_id}_{i:02d}.png"
-        img.save(out_dir / f"{volume_id}_{i:02d}.png")
-        paths.append(rel)
+        img = Image.fromarray(sl).convert("RGB").resize((size, size), Image.BILINEAR)
+        img.save(slices_dir / f"{volume_id}_{i:02d}.png")
+        paths.append(f"slices/{volume_id}_{i:02d}.png")
     return paths
 
 
-# ── DICOM → numpy via pydicom ─────────────────────────────────────────────────
+# ── Consensus mask (same voxel grid as scan.to_volume()) ──────────────────────
 
-def load_dicom_series(dicom_dir: Path) -> np.ndarray:
-    """Load a sorted DICOM series and return a float32 (Z, H, W) array in HU."""
-    import pydicom
+def build_consensus_mask(scan, vol_shape: tuple) -> np.ndarray:
+    """>=3-of-4 radiologist agreement, in the to_volume() voxel grid."""
+    mask = np.zeros(vol_shape, dtype=np.uint8)
+    for cluster in scan.cluster_annotations():
+        if len(cluster) < 3:
+            continue
+        bboxes = [ann.bbox() for ann in cluster]
+        i0 = min(bb[0].start for bb in bboxes); i1 = max(bb[0].stop for bb in bboxes)
+        j0 = min(bb[1].start for bb in bboxes); j1 = max(bb[1].stop for bb in bboxes)
+        k0 = min(bb[2].start for bb in bboxes); k1 = max(bb[2].stop for bb in bboxes)
 
-    dcm_files = sorted(dicom_dir.glob("*.dcm"))
-    if not dcm_files:
-        raise FileNotFoundError(f"No DICOM files in {dicom_dir}")
-
-    slices = []
-    for dcm_path in dcm_files:
-        ds = pydicom.dcmread(str(dcm_path))
-        arr = ds.pixel_array.astype(np.float32)
-        # Convert to Hounsfield Units
-        slope = float(getattr(ds, "RescaleSlope", 1.0))
-        intercept = float(getattr(ds, "RescaleIntercept", 0.0))
-        arr = arr * slope + intercept
-        slices.append(arr)
-
-    return np.stack(slices, axis=0)  # (Z, H, W)
-
-
-# ── Consensus mask builder ────────────────────────────────────────────────────
-
-def _build_consensus_mask(
-    scan_meta: dict,
-    dicom_dir: Path,
-    masks_dir: Path,
-    volume_id: str,
-    vol_shape: tuple,
-) -> str | None:
-    """
-    Build a binary consensus segmentation mask from pylidc nodule annotations.
-    A voxel is marked positive if ≥3 radiologists included it in their contour.
-    Saves as NIfTI to masks_dir/<volume_id>_gt.nii.gz and returns the path.
-    """
-    try:
-        import numpy as np
-        if not hasattr(np, "int"):   np.int   = int    # removed in numpy 1.24
-        if not hasattr(np, "bool"):  np.bool  = bool
-        if not hasattr(np, "float"): np.float = float
-        if not hasattr(np, "complex"): np.complex = complex
-        import pylidc as pl
-        import nibabel as nib
-
-        masks_dir.mkdir(parents=True, exist_ok=True)
-        out_path = masks_dir / f"{volume_id}_gt.nii.gz"
-        if out_path.exists():
-            return str(out_path)
-
-        scan = pl.query(pl.Scan).filter(
-            pl.Scan.patient_id == scan_meta["patient_id"]
-        ).first()
-        if scan is None:
-            return None
-
-        consensus_mask = np.zeros(vol_shape, dtype=np.uint8)
-        for cluster in scan.cluster_annotations():
-            if len(cluster) < 3:
-                continue
-            # Compute union bounding box across all annotations
-            bboxes = [ann.bbox() for ann in cluster]  # each: [x_slc, y_slc, z_slc]
-            x0 = min(bb[0].start for bb in bboxes)
-            x1 = max(bb[0].stop  for bb in bboxes)
-            y0 = min(bb[1].start for bb in bboxes)
-            y1 = max(bb[1].stop  for bb in bboxes)
-            z0 = min(bb[2].start for bb in bboxes)
-            z1 = max(bb[2].stop  for bb in bboxes)
-
-            # Vote accumulator in union bbox space (x, y, z)
-            vote = np.zeros((x1-x0, y1-y0, z1-z0), dtype=np.uint8)
-            for ann in cluster:
-                bb = ann.bbox()
-                bmask = ann.boolean_mask().astype(np.uint8)
-                ox = bb[0].start - x0
-                oy = bb[1].start - y0
-                oz = bb[2].start - z0
-                vote[ox:ox+bmask.shape[0],
-                     oy:oy+bmask.shape[1],
-                     oz:oz+bmask.shape[2]] += bmask
-
-            # Consensus: voxel positive if >=3 radiologists agreed
-            cmask = (vote >= 3).astype(np.uint8)   # (x, y, z)
-            # Volume is (z, y, x) — transpose
-            cmask_zyx = cmask.transpose(2, 1, 0)
-            consensus_mask[z0:z1, y0:y1, x0:x1] |= cmask_zyx
-
-        nib.save(
-            nib.Nifti1Image(consensus_mask, affine=np.eye(4)),
-            str(out_path),
-        )
-        return str(out_path)
-
-    except Exception as e:
-        print(f"  Warning: could not build consensus mask for {volume_id}: {e}")
-        return None
+        vote = np.zeros((i1 - i0, j1 - j0, k1 - k0), dtype=np.uint8)
+        for ann in cluster:
+            bb = ann.bbox()
+            bm = ann.boolean_mask().astype(np.uint8)
+            vote[bb[0].start - i0: bb[0].start - i0 + bm.shape[0],
+                 bb[1].start - j0: bb[1].start - j0 + bm.shape[1],
+                 bb[2].start - k0: bb[2].start - k0 + bm.shape[2]] += bm
+        mask[i0:i1, j0:j1, k0:k1] |= (vote >= 3).astype(np.uint8)
+    return mask
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--lidc_root", default="/data/lidc_idri")
-    p.add_argument("--output_root", default="/data/processed")
+    p.add_argument("--lidc_root", default="~/icsdg_data/lidc_idri")
+    p.add_argument("--output_root", default="~/icsdg_data/processed")
+    p.add_argument("--max_scans", type=int, default=150)
     p.add_argument("--max_slices", type=int, default=16)
     p.add_argument("--slice_size", type=int, default=224)
     return p.parse_args()
@@ -178,100 +104,89 @@ def parse_args():
 
 def main():
     args = parse_args()
+    _numpy_compat()
+    import pylidc as pl
+    import nibabel as nib
 
-    lidc_root = Path(args.lidc_root)
-    output_root = Path(args.output_root)
+    lidc_root = Path(args.lidc_root).expanduser()
+    output_root = Path(args.output_root).expanduser()
     slices_dir = output_root / "slices"
-    slices_dir.mkdir(parents=True, exist_ok=True)
+    nifti_dir = lidc_root / "nifti"
+    masks_dir = output_root / "masks"
+    for d in (slices_dir, nifti_dir, masks_dir):
+        d.mkdir(parents=True, exist_ok=True)
 
     ann_path = lidc_root / "nodule_annotations.json"
     if not ann_path.exists():
         raise FileNotFoundError(
-            f"Annotation index not found at {ann_path}. "
-            "Run download_lidc.py first."
-        )
-
+            f"Annotation index not found at {ann_path}. Run download_lidc.py first.")
     with open(ann_path) as f:
         annotations = json.load(f)
-
     print(f"Loaded {len(annotations)} annotated scans from LIDC-IDRI")
 
-    import numpy as np
-    if not hasattr(np, "int"):   np.int   = int
-    if not hasattr(np, "bool"):  np.bool  = bool
-    if not hasattr(np, "float"): np.float = float
-    if not hasattr(np, "complex"): np.complex = complex
-    import pylidc as pl
-
-    # Build a lookup: scan_id (str) → pylidc Scan object
     pl_scans = {str(s.id): s for s in pl.query(pl.Scan).all()}
 
     records = []
-
     for scan_meta in tqdm(annotations, desc="Processing LIDC-IDRI"):
+        if len(records) >= args.max_scans:
+            break
+
         patient_id = scan_meta["patient_id"]
         scan_id = scan_meta["scan_id"]
         volume_id = f"lidc_{patient_id}_{scan_id}"
 
-        # Use pylidc to get the DICOM directory via series instance UID
-        pl_scan = pl_scans.get(scan_id)
-        if pl_scan is None:
-            print(f"  Warning: scan {scan_id} not found in pylidc, skipping")
-            continue
-        # tcia_utils downloads into folders named by series UID
-        dicom_dir = lidc_root / "dicoms" / pl_scan.series_instance_uid
-        if not dicom_dir.exists() or not list(dicom_dir.glob("*.dcm")):
-            print(f"  Warning: DICOM not found for {patient_id} ({pl_scan.series_instance_uid}), skipping")
+        scan = pl_scans.get(scan_id)
+        if scan is None:
             continue
 
         try:
-            vol = load_dicom_series(dicom_dir)
-            vol_windowed = window_ct(vol)
-            slices, z_indices = sample_key_slices(vol_windowed, args.max_slices)
+            vol = scan.to_volume()                       # HU, (i, j, k)
+            gt_mask = build_consensus_mask(scan, vol.shape)
+            if gt_mask.sum() == 0:
+                continue                                 # no >=3-consensus nodule
+
+            spacing = float(scan.pixel_spacing or 1.0)
+            thickness = float(scan.slice_thickness or 1.0)
+            affine = np.diag([spacing, spacing, thickness, 1.0])
+
+            nii_path = nifti_dir / f"{volume_id}.nii.gz"
+            mask_path = masks_dir / f"{volume_id}_gt.nii.gz"
+            nib.save(nib.Nifti1Image(vol.astype(np.int16), affine), str(nii_path))
+            nib.save(nib.Nifti1Image(gt_mask, affine), str(mask_path))
+
+            vol_zhw = window_ct(vol).transpose(2, 0, 1)  # (k, i, j) axial stack
+            slices, z_idx = sample_key_slices(vol_zhw, args.max_slices)
             slice_paths = save_slices(slices, slices_dir, volume_id, args.slice_size)
         except Exception as e:
             print(f"  Warning: skipping {patient_id}: {e}")
             continue
 
-        # Build consensus segmentation mask from pylidc annotations
-        gt_mask_path = _build_consensus_mask(
-            scan_meta, dicom_dir, output_root / "masks", volume_id, vol.shape
-        )
-
-        records.append(
-            {
-                "id": volume_id,
-                "volume_id": volume_id,
-                "patient_id": patient_id,
-                "scan_id": scan_id,
-                "nii_path": str(dicom_dir),               # full-res path for VISTA3D
-                "images": slice_paths,
-                "sampled_z_indices": z_indices,
-                "volume_shape": list(vol.shape),
-                "pixel_spacing": scan_meta["pixel_spacing"],
-                "slice_thickness": scan_meta["slice_thickness"],
-                "gt_mask_path": gt_mask_path,             # consensus segmentation mask
-                "conversations": [
-                    {
-                        "from": "human",
-                        "value": (
-                            "<image>\n" * len(slice_paths)
-                            + "Identify and localise pulmonary nodules in the "
-                            "provided chest CT scan."
-                        ),
-                    }
-                ],
-            }
-        )
+        records.append({
+            "id": volume_id,
+            "volume_id": volume_id,
+            "patient_id": patient_id,
+            "scan_id": scan_id,
+            "nii_path": str(nii_path),            # full-res NIfTI for VISTA3D
+            "gt_mask_path": str(mask_path),       # consensus segmentation mask
+            "images": slice_paths,
+            "sampled_z_indices": z_idx,
+            "volume_shape": list(vol.shape),
+            "conversations": [{
+                "from": "human",
+                "value": ("<image>\n" * len(slice_paths)
+                          + "Identify and localise pulmonary nodules in the "
+                            "provided chest CT scan."),
+            }],
+        })
 
     out_path = output_root / "lidc_eval.json"
     with open(out_path, "w") as f:
         json.dump(records, f, indent=2)
 
-    total_nodules = sum(1 for r in records if r.get("gt_mask_path"))
     print(f"\nPreprocessing complete.")
     print(f"  Evaluation records : {len(records)}")
-    print(f"  Total gt nodules   : {total_nodules}")
+    print(f"  NIfTI volumes      : {nifti_dir}")
+    print(f"  Consensus masks    : {masks_dir}")
     print(f"  Output             : {out_path}")
 
 

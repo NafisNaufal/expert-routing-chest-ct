@@ -95,17 +95,24 @@ def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_proc
     if not images:
         return None, False
 
-    prompt = (
+    from llava.mm_utils import tokenizer_image_token  # type: ignore
+    from llava.conversation import conv_templates  # type: ignore
+
+    prompt_text = (
         "<image>\n" * len(images)
         + "Identify and localise pulmonary nodules in this chest CT scan."
     )
+    conv = conv_templates["llama_3"].copy()
+    conv.append_message(conv.roles[0], prompt_text)
+    conv.append_message(conv.roles[1], None)
+    input_ids = tokenizer_image_token(
+        conv.get_prompt(), tokenizer, return_tensors="pt"
+    ).unsqueeze(0).to(device)
 
-    input_ids = tokenizer(prompt, return_tensors="pt", truncation=True,
-                          max_length=512).input_ids.to(device)
     image_tensor = image_processor.preprocess(images, return_tensors="pt")["pixel_values"]
     if isinstance(image_tensor, list):
         image_tensor = torch.stack(image_tensor)
-    image_tensor = image_tensor.to(device=device, dtype=model.dtype)
+    image_tensor = image_tensor.to(device=device, dtype=next(model.parameters()).dtype)
 
     with torch.no_grad():
         out = model.generate(input_ids, images=image_tensor, max_new_tokens=128)
@@ -161,17 +168,18 @@ def main():
     if args.condition != "direct_vista3d":
         from llava.model.builder import load_pretrained_model  # type: ignore
 
-        lora_path = args.lora_adapter if (args.condition == "finetuned" and args.lora_adapter) else None
-        model_base = args.model_path if lora_path else None
-
         tokenizer, model, image_processor, _ = load_pretrained_model(
-            model_path=lora_path or args.model_path,
-            model_base=model_base,
+            model_path=args.model_path,
             model_name="llava_llama",
+            model_base=None,
             device_map="auto",
+            torch_dtype=torch.bfloat16,
         )
-        if lora_path:
-            print(f"LoRA adapter: {lora_path}")
+        if args.condition == "finetuned" and args.lora_adapter:
+            from peft import PeftModel  # type: ignore
+            adapter = str(Path(args.lora_adapter).expanduser())
+            model = PeftModel.from_pretrained(model, adapter)
+            print(f"LoRA adapter: {adapter}")
         model.eval()
 
     all_dice, all_iou = [], []

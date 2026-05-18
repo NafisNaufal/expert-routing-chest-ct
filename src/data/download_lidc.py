@@ -55,12 +55,20 @@ def parse_args():
         action="store_true",
         help="Skip DICOM download (use if DICOMs are already present)",
     )
+    p.add_argument(
+        "--max_series",
+        type=int,
+        default=220,
+        help="Cap on the number of LIDC series to download (disk-limited "
+             "server). 0 = all 1018 (~125 GB). Default 220 leaves margin to "
+             "select ~150 scans with consensus nodules.",
+    )
     return p.parse_args()
 
 
 # ── Option A: download via tcia_utils ────────────────────────────────────────
 
-def download_via_tcia_utils(dicom_home: Path) -> None:
+def download_via_tcia_utils(dicom_home: Path, max_series: int = 0) -> None:
     try:
         from tcia_utils import nbia  # type: ignore
     except ImportError:
@@ -74,6 +82,9 @@ def download_via_tcia_utils(dicom_home: Path) -> None:
     print(f"Fetching series list for collection: {TCIA_COLLECTION}")
     series_list = nbia.getSeries(collection=TCIA_COLLECTION)
     print(f"Found {len(series_list)} series")
+    if max_series and len(series_list) > max_series:
+        series_list = series_list[:max_series]
+        print(f"Capped to {max_series} series (--max_series, disk-limited)")
 
     dicom_home.mkdir(parents=True, exist_ok=True)
     print(f"Downloading DICOMs to {dicom_home}")
@@ -177,7 +188,7 @@ def main():
     dicom_home = Path(args.dicom_home) if args.dicom_home else output_dir / "dicoms"
 
     if not args.skip_download:
-        download_via_tcia_utils(dicom_home)
+        download_via_tcia_utils(dicom_home, max_series=args.max_series)
     else:
         print(f"Skipping download. Using existing DICOMs at {dicom_home}")
         if not dicom_home.exists():
