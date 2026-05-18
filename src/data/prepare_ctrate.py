@@ -227,10 +227,23 @@ def main():
     token = args.hf_token or os.environ.get("HF_TOKEN")
     fs = HfFileSystem(token=token)
 
-    print("Listing CT-RATE train volumes (may take a moment) ...")
+    # Derive HF volume paths directly from report-index keys. A recursive
+    # `fs.glob("train/**/*.nii.gz")` over ~50k files hangs for many minutes;
+    # CT-RATE's layout is fully predictable from the volume name:
+    #   dataset/train/train_X/train_X_Y/train_X_Y_Z.nii.gz
     base = f"datasets/{REPO_ID}/dataset"
-    all_volumes = sorted(fs.glob(f"{base}/train/**/*.nii.gz"))
-    print(f"  {len(all_volumes)} volumes available")
+
+    def hf_path_for(volume_id: str):
+        parts = volume_id.split("_")
+        if len(parts) < 4 or parts[0] != "train":
+            return None
+        f1 = "_".join(parts[:2])          # train_X
+        f2 = "_".join(parts[:3])          # train_X_Y
+        return f"{base}/train/{f1}/{f2}/{volume_id}.nii.gz"
+
+    all_volumes = [p for p in (hf_path_for(v) for v in sorted(report_index))
+                   if p is not None]
+    print(f"Derived {len(all_volumes)} train volume paths from the report index")
 
     random.shuffle(all_volumes)
     all_volumes = all_volumes[: args.max_volumes]

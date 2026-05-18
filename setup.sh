@@ -33,6 +33,13 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 pip install --upgrade pip
 
+# nvcc 11.8 — required only so `import deepspeed` (pulled in by llava's import
+# chain) can run its op-compatibility probe. We never build deepspeed ops.
+echo "==> Installing cuda-nvcc 11.8 into the env"
+conda install -y -c nvidia cuda-nvcc=11.8
+conda env config vars set CUDA_HOME="$CONDA_PREFIX" -n "$CONDA_ENV"
+export CUDA_HOME="$CONDA_PREFIX"
+
 # ── 2. PyTorch (cu118 — REQUIRED for driver 470) ──────────────────────────────
 echo "==> Installing PyTorch 2.3.0 + cu118"
 pip install torch==2.3.0 torchvision==0.18.0 \
