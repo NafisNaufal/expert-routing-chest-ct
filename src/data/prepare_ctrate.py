@@ -149,15 +149,23 @@ def save_slices(slices, slices_dir: Path, volume_id: str, size: int) -> list:
 def process_volume(nii_path: Path, slope: float, intercept: float,
                    max_slices: int, slices_dir: Path, volume_id: str,
                    slice_size: int) -> list:
+    """Read ONLY the sampled axial slices via nibabel's lazy dataobj — never
+    loads the full ~300-slice volume into RAM (the cause of OOM kills)."""
     import nibabel as nib
 
     img = nib.load(str(nii_path))
-    vol = img.get_fdata(dtype=np.float32)
-    if vol.ndim == 3:
-        vol = vol.transpose(2, 0, 1)            # (H,W,Z) -> (Z,H,W)
-    vol = vol * slope + intercept               # CT-RATE rescale to Hounsfield Units
-    vol = window_ct(vol)
-    slices = sample_key_slices(vol, max_slices)
+    if len(img.shape) != 3:
+        raise ValueError(f"expected a 3D volume, got shape {img.shape}")
+
+    z = img.shape[2]                            # NIfTI axis order (H, W, Z)
+    margin = max(1, int(z * 0.10))
+    indices = np.linspace(margin, z - margin - 1, max_slices, dtype=int)
+
+    slices = []
+    for k in indices:
+        sl = np.asarray(img.dataobj[:, :, int(k)], dtype=np.float32)
+        sl = sl * slope + intercept             # CT-RATE rescale to Hounsfield Units
+        slices.append(window_ct(sl))
     return save_slices(slices, slices_dir, volume_id, slice_size)
 
 
