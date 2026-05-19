@@ -277,6 +277,9 @@ def main():
     tokenizer, model, image_processor, _ = load_pretrained_model(
         model_path=cfg["model"]["name"], model_name="llava_llama",
         model_base=None, device_map="auto", torch_dtype=torch.bfloat16)
+    # VILA's builder hardcodes the vision tower / projector to float16 while
+    # the LLM ends up bf16 — unify everything to bf16 to avoid dtype clashes.
+    model = model.to(torch.bfloat16)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
