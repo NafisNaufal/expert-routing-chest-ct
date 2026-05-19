@@ -290,7 +290,11 @@ def main():
     model.config.use_cache = False
     model.gradient_checkpointing_enable()
     model.enable_input_require_grads()
-    model.train()
+    # Keep the model in eval mode: VILA's training-mode repack_multimodal_data
+    # path requires inputs_embeds (None for text-only forwards) and only packs
+    # sequences for throughput — irrelevant at batch size 1. Gradients still
+    # flow into the LoRA params; only dropout is disabled.
+    model.eval()
     device = "cuda"
 
     with open(Path(args.data_path).expanduser()) as f:
