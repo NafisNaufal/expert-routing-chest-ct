@@ -282,6 +282,9 @@ def main():
     model = model.to(torch.bfloat16)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # VILA's repack_multimodal_data (training path) reads llm.pad_token_id as a
+    # direct attribute — it normally only lives on llm.config.
+    model.llm.pad_token_id = tokenizer.pad_token_id
 
     model = build_lora_model(model, cfg["lora"])
     model.config.use_cache = False
