@@ -33,6 +33,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -50,6 +51,17 @@ def add_vila_to_path(vila_framework: str) -> None:
         p = str(p)
         if p not in sys.path:
             sys.path.insert(0, p)
+
+
+def init_process_group_if_needed() -> None:
+    """VILA's forward() calls calculate_loss_weight() -> dist.all_reduce(),
+    which requires an initialised process group even for single-GPU runs.
+    A trivial 1-rank group makes all_reduce a no-op."""
+    import torch.distributed as dist
+    if dist.is_available() and not dist.is_initialized():
+        os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+        os.environ.setdefault("MASTER_PORT", "29500")
+        dist.init_process_group(backend="nccl", rank=0, world_size=1)
 
 
 # ── Embedding extraction ──────────────────────────────────────────────────────
@@ -130,6 +142,7 @@ def parse_args():
 def main():
     args = parse_args()
     add_vila_to_path(args.vila_repo)
+    init_process_group_if_needed()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)

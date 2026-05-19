@@ -26,6 +26,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -34,6 +35,16 @@ import numpy as np
 import torch
 import yaml
 from tqdm import tqdm
+
+
+def init_process_group_if_needed() -> None:
+    """VILA's forward() calls calculate_loss_weight() -> dist.all_reduce(),
+    which requires an initialised process group even for single-GPU runs."""
+    import torch.distributed as dist
+    if dist.is_available() and not dist.is_initialized():
+        os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+        os.environ.setdefault("MASTER_PORT", "29500")
+        dist.init_process_group(backend="nccl", rank=0, world_size=1)
 
 
 # ── Segmentation metrics ──────────────────────────────────────────────────────
@@ -143,6 +154,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    init_process_group_if_needed()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
