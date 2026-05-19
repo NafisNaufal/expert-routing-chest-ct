@@ -106,8 +106,10 @@ def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_proc
     if not images:
         return None, False, ""
 
-    from llava.mm_utils import tokenizer_image_token  # type: ignore
-    from llava.conversation import conv_templates  # type: ignore
+    from llava.mm_utils import (tokenizer_image_token, process_images,  # type: ignore
+                                KeywordsStoppingCriteria)
+    from llava.conversation import conv_templates, SeparatorStyle  # type: ignore
+    from llava.constants import IMAGE_TOKEN_INDEX  # type: ignore
 
     prompt_text = (
         "<image>\n" * len(images)
@@ -116,19 +118,29 @@ def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_proc
     conv = conv_templates["llama_3"].copy()
     conv.append_message(conv.roles[0], prompt_text)
     conv.append_message(conv.roles[1], None)
+    prompt = conv.get_prompt()
+
+    # Mirror the canonical VILA inference path (llava/eval/run_vila.py):
+    # process_images() for the right tensor format, and images passed as a LIST.
     input_ids = tokenizer_image_token(
-        conv.get_prompt(), tokenizer, return_tensors="pt"
+        prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
     ).unsqueeze(0).to(device)
+    images_tensor = process_images(images, image_processor, model.config).to(
+        device=device, dtype=next(model.parameters()).dtype)
 
-    image_tensor = image_processor.preprocess(images, return_tensors="pt")["pixel_values"]
-    if isinstance(image_tensor, list):
-        image_tensor = torch.stack(image_tensor)
-    image_tensor = image_tensor.to(device=device, dtype=next(model.parameters()).dtype)
+    stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+    stopping = KeywordsStoppingCriteria([stop_str], tokenizer, input_ids)
 
-    with torch.no_grad():
-        out = model.generate(input_ids, images=image_tensor, max_new_tokens=128)
-    # VILA's generate returns only the newly generated tokens.
-    response = tokenizer.decode(out[0], skip_special_tokens=True).strip()
+    with torch.inference_mode():
+        output_ids = model.generate(
+            input_ids,
+            images=[images_tensor],
+            do_sample=False,
+            max_new_tokens=128,
+            use_cache=True,
+            stopping_criteria=[stopping],
+        )
+    response = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
     if "VISTA3D" in response and "lung tumor" in response.lower():
         mask = call_vista3d(record.get("nii_path", ""), output_dir, vista3d)
