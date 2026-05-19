@@ -45,6 +45,16 @@ train:
   dataloader_num_workers: 4
   seed: 42
 
+# ── Contrastive retrieval objective ──────────────────────────────────────────
+# Trained jointly with detection routing on the SAME LoRA adapter, so one
+# fine-tuned model handles both tasks. CLIP-style symmetric InfoNCE aligns each
+# volume's image embedding with its radiology-report embedding.
+contrastive:
+  retrieval_slices: 8       # key slices for the retrieval embedding (fewer = larger batch)
+  batch_size: 8             # InfoNCE in-batch negatives = batch_size - 1
+  temperature: 0.07         # InfoNCE softmax temperature
+  loss_weight: 1.0          # weight of the contrastive loss vs. the detection LM loss
+
 # ── Evaluation ───────────────────────────────────────────────────────────────
 eval:
   retrieval_k: [1, 5, 10]              # Recall@K values

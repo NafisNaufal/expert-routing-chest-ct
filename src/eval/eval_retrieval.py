@@ -48,6 +48,10 @@ from tqdm import tqdm
 from PIL import Image
 
 
+# Image-side prompt for the retrieval embedding — MUST match finetune_lora.py.
+RETRIEVAL_IMAGE_PROMPT = "Describe this chest CT scan."
+
+
 def add_vila_to_path(vila_framework: str) -> None:
     root = Path(vila_framework).expanduser().resolve()
     for p in [root, root / "m3", root / "thirdparty" / "VILA"]:
@@ -153,7 +157,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     processed_root = Path(cfg["data"]["processed_root"]).expanduser()
     k_values = cfg["eval"]["retrieval_k"]
-    max_slices = cfg["data"]["max_slices"]
+    retrieval_slices = cfg["contrastive"]["retrieval_slices"]
     base_name = cfg["model"]["name"]
 
     from llava.model.builder import load_pretrained_model  # noqa
@@ -178,17 +182,22 @@ def main():
 
     index_emb, query_emb, ids = [], [], []
     for record in tqdm(records, desc="Embedding"):
+        # Evenly sample retrieval_slices key slices — matches RetrievalDataset
+        # in finetune_lora.py so train and eval embeddings are consistent.
+        rels = record["images"]
+        if len(rels) > retrieval_slices:
+            step = len(rels) / retrieval_slices
+            rels = [rels[int(i * step)] for i in range(retrieval_slices)]
         images = [
-            Image.open(processed_root / rel).convert("RGB")
-            for rel in record["images"][:max_slices]
-            if (processed_root / rel).exists()
+            Image.open(processed_root / r).convert("RGB")
+            for r in rels if (processed_root / r).exists()
         ]
         query_text = record.get("query_text", "")
         if not images or not query_text:
             continue
 
         index_emb.append(embed(model, tokenizer, image_processor,
-                               "Describe this chest CT scan.", images, device))
+                               RETRIEVAL_IMAGE_PROMPT, images, device))
         query_emb.append(embed(model, tokenizer, image_processor,
                                query_text, None, device))
         ids.append(record["volume_id"])

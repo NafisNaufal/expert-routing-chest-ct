@@ -1,22 +1,21 @@
 """
 finetune_lora.py
 ----------------
-LoRA fine-tuning of VILA-M3 8B on CT-RATE detection-routing instructions.
+Joint LoRA fine-tuning of VILA-M3 8B on CT-RATE. One LoRA adapter is trained
+with TWO objectives so a single fine-tuned model handles both paper tasks:
 
-VILA-M3 is a LLaVA-architecture model (model_type "llava_llama"). It is NOT a
-standard HuggingFace AutoModelForCausalLM — it must be loaded via
-llava.model.builder.load_pretrained_model, and its forward() accepts `images`
-directly and runs the multimodal token-merge internally.
+  1. Detection routing  — causal-LM loss teaching the model to emit the
+     structured token <VISTA3D(lung tumor)> for thoracic localisation prompts.
 
-Two things the previous version got wrong and this version fixes:
-  1. Image tokens. The literal string "<image>" must be converted to the
-     special IMAGE_TOKEN_INDEX (-200) via llava's tokenizer_image_token —
-     a plain tokenizer turns it into ordinary text and images are never fed in.
-  2. Prompt format. VILA-M3 expects the llama_3 conversation template, not a
-     bare "USER:/ASSISTANT:" string.
+  2. Case retrieval     — a CLIP-style symmetric InfoNCE loss that pulls each
+     volume's image embedding (key CT slices) towards its radiology-report
+     embedding, so the model's hidden space becomes retrieval-aligned.
+     Without this, VILA-M3's embeddings give random retrieval (see paper §4).
 
-Only detection-routing instructions are used for training. Retrieval is handled
-at eval time by extracting hidden-state embeddings (see eval_retrieval.py).
+Both objectives update the same adapter; each optimiser step accumulates
+`gradient_accumulation_steps` detection micro-batches plus one contrastive
+batch. Forward/backward are run sequentially so peak memory is one objective's
+worth, not the sum.
 
 Usage:
     python src/train/finetune_lora.py \
@@ -27,18 +26,24 @@ Usage:
 
 import argparse
 import json
+import math
+import os
 import sys
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 import yaml
-from torch.utils.data import Dataset
-from transformers import TrainingArguments, Trainer, set_seed
+from torch.utils.data import Dataset, DataLoader
+from transformers import set_seed, get_cosine_schedule_with_warmup
 from peft import LoraConfig, get_peft_model, TaskType
+from tqdm import tqdm
+
+# Image-side prompt for the retrieval embedding — MUST match eval_retrieval.py.
+RETRIEVAL_IMAGE_PROMPT = "Describe this chest CT scan."
 
 
 def add_vila_to_path(vila_framework: str) -> None:
-    """Add the VILA-M3 framework + llava submodule to sys.path."""
     root = Path(vila_framework).expanduser().resolve()
     for p in [root, root / "m3", root / "thirdparty" / "VILA"]:
         p = str(p)
@@ -56,23 +61,26 @@ def init_process_group_if_needed() -> None:
         dist.init_process_group(backend="nccl", rank=0, world_size=1)
 
 
-# ── Dataset ───────────────────────────────────────────────────────────────────
+def report_from_record(rec: dict) -> str:
+    """Clean radiology-report text for a detection record (the contrastive
+    text side). Uses the explicit field if present, else strips the routing
+    lead-in from the gpt response."""
+    if rec.get("report_text"):
+        return rec["report_text"]
+    val = rec["conversations"][1]["value"]
+    marker = "<VISTA3D(lung tumor)>\n"
+    return val.split(marker, 1)[1] if marker in val else val
 
-class CTRATEInstructionDataset(Dataset):
-    """
-    Detection-routing instruction records from ctrate_train.json. Each record
-    has a list of key-slice image paths and a two-turn human->gpt conversation.
-    """
 
-    def __init__(self, data_path, tokenizer, image_processor, processed_root,
-                 max_slices=16, max_length=2048, model_dtype=torch.bfloat16):
-        from llava.constants import IGNORE_INDEX  # noqa
+# ── Datasets ──────────────────────────────────────────────────────────────────
 
-        with open(data_path) as f:
-            records = json.load(f)
-        # Train only on detection-routing instructions.
+class DetectionDataset(Dataset):
+    """Detection-routing records -> causal-LM training samples."""
+
+    def __init__(self, records, tokenizer, image_processor, processed_root,
+                 max_slices, max_length=2048, model_dtype=torch.bfloat16):
+        from llava.constants import IGNORE_INDEX
         self.records = [r for r in records if r.get("type") == "detection"]
-
         self.tokenizer = tokenizer
         self.image_processor = image_processor
         self.processed_root = Path(processed_root).expanduser()
@@ -84,149 +92,171 @@ class CTRATEInstructionDataset(Dataset):
     def __len__(self):
         return len(self.records)
 
-    def _build_prompts(self, human_value, gpt_value):
-        """Return (full_prompt, prefix_prompt) using the llama_3 template."""
-        from llava.conversation import conv_templates
-
-        conv = conv_templates["llama_3"].copy()
-        conv.append_message(conv.roles[0], human_value)
-        conv.append_message(conv.roles[1], gpt_value)
-        full_prompt = conv.get_prompt()
-
-        conv_p = conv_templates["llama_3"].copy()
-        conv_p.append_message(conv_p.roles[0], human_value)
-        conv_p.append_message(conv_p.roles[1], None)
-        prefix_prompt = conv_p.get_prompt()
-        return full_prompt, prefix_prompt
-
     def __getitem__(self, idx):
         from PIL import Image as PILImage
         from llava.mm_utils import tokenizer_image_token
+        from llava.conversation import conv_templates
 
-        record = self.records[idx]
-
-        # Load slice images that actually exist on disk.
+        rec = self.records[idx]
         images = []
-        for rel_path in record["images"][: self.max_slices]:
-            img_path = self.processed_root / rel_path
-            if img_path.exists():
-                images.append(PILImage.open(img_path).convert("RGB"))
+        for rel in rec["images"][: self.max_slices]:
+            p = self.processed_root / rel
+            if p.exists():
+                images.append(PILImage.open(p).convert("RGB"))
 
-        # Conversation turns. Re-sync the <image> token count to the number of
-        # images actually loaded — VILA consumes exactly one image per token.
-        human_value = record["conversations"][0]["value"].replace("<image>\n", "")
-        human_value = "<image>\n" * len(images) + human_value
-        gpt_value = record["conversations"][1]["value"]
+        human = rec["conversations"][0]["value"].replace("<image>\n", "")
+        human = "<image>\n" * len(images) + human
+        gpt = rec["conversations"][1]["value"]
 
-        full_prompt, prefix_prompt = self._build_prompts(human_value, gpt_value)
+        conv = conv_templates["llama_3"].copy()
+        conv.append_message(conv.roles[0], human)
+        conv.append_message(conv.roles[1], gpt)
+        full = conv.get_prompt()
 
-        full_ids = tokenizer_image_token(full_prompt, self.tokenizer,
-                                         return_tensors="pt")
-        prefix_ids = tokenizer_image_token(prefix_prompt, self.tokenizer,
-                                           return_tensors="pt")
+        conv_p = conv_templates["llama_3"].copy()
+        conv_p.append_message(conv_p.roles[0], human)
+        conv_p.append_message(conv_p.roles[1], None)
+        prefix = conv_p.get_prompt()
 
+        full_ids = tokenizer_image_token(full, self.tokenizer, return_tensors="pt")
+        prefix_ids = tokenizer_image_token(prefix, self.tokenizer, return_tensors="pt")
         if full_ids.shape[0] > self.max_length:
             full_ids = full_ids[: self.max_length]
 
-        # Mask the prompt prefix so loss is computed only on the gpt response.
         labels = full_ids.clone()
-        prefix_len = min(prefix_ids.shape[0], full_ids.shape[0])
-        labels[:prefix_len] = self.ignore_index
+        labels[: min(prefix_ids.shape[0], full_ids.shape[0])] = self.ignore_index
 
-        attention_mask = torch.ones_like(full_ids)
-
-        # Preprocess images -> (num_images, 3, H, W) in the model dtype.
         if images:
-            image_tensor = self.image_processor.preprocess(
-                images, return_tensors="pt"
-            )["pixel_values"]
-            if isinstance(image_tensor, list):
-                image_tensor = torch.stack(image_tensor)
-            image_tensor = image_tensor.to(self.model_dtype)
+            img = self.image_processor.preprocess(
+                images, return_tensors="pt")["pixel_values"]
+            if isinstance(img, list):
+                img = torch.stack(img)
+            img = img.to(self.model_dtype)
         else:
-            image_tensor = torch.zeros(0, 3, 224, 224, dtype=self.model_dtype)
+            img = torch.zeros(0, 3, 224, 224, dtype=self.model_dtype)
 
         return {
             "input_ids": full_ids,
-            "attention_mask": attention_mask,
+            "attention_mask": torch.ones_like(full_ids),
             "labels": labels,
-            "images": image_tensor,
+            "images": img,
         }
 
 
-class MultimodalCollator:
-    """Pads text fields and concatenates per-sample image tensors."""
+class RetrievalDataset(Dataset):
+    """Same volumes, viewed as (key slices, report text) contrastive pairs."""
 
-    def __init__(self, pad_token_id, ignore_index):
-        self.pad_token_id = pad_token_id
-        self.ignore_index = ignore_index
+    def __init__(self, records, image_processor, processed_root,
+                 retrieval_slices, model_dtype=torch.bfloat16):
+        self.records = [r for r in records if r.get("type") == "detection"]
+        self.image_processor = image_processor
+        self.processed_root = Path(processed_root).expanduser()
+        self.retrieval_slices = retrieval_slices
+        self.model_dtype = model_dtype
 
-    def __call__(self, features):
-        max_len = max(f["input_ids"].shape[0] for f in features)
+    def __len__(self):
+        return len(self.records)
 
-        input_ids, attention_mask, labels = [], [], []
-        for f in features:
-            n_pad = max_len - f["input_ids"].shape[0]
-            input_ids.append(torch.cat([
-                f["input_ids"],
-                torch.full((n_pad,), self.pad_token_id, dtype=torch.long)]))
-            attention_mask.append(torch.cat([
-                f["attention_mask"], torch.zeros(n_pad, dtype=torch.long)]))
-            labels.append(torch.cat([
-                f["labels"],
-                torch.full((n_pad,), self.ignore_index, dtype=torch.long)]))
+    def __getitem__(self, idx):
+        from PIL import Image as PILImage
 
-        # VILA consumes images by counting IMAGE_TOKEN_INDEX across the batch,
-        # so a single concatenated (total_images, 3, H, W) tensor is correct.
-        images = torch.cat([f["images"] for f in features], dim=0)
+        rec = self.records[idx]
+        # Evenly sample `retrieval_slices` of the available key slices.
+        rels = rec["images"]
+        if len(rels) > self.retrieval_slices:
+            step = len(rels) / self.retrieval_slices
+            rels = [rels[int(i * step)] for i in range(self.retrieval_slices)]
 
-        return {
-            "input_ids": torch.stack(input_ids),
-            "attention_mask": torch.stack(attention_mask),
-            "labels": torch.stack(labels),
-            "images": images,
-        }
+        images = [PILImage.open(self.processed_root / r).convert("RGB")
+                  for r in rels if (self.processed_root / r).exists()]
+        img = self.image_processor.preprocess(
+            images, return_tensors="pt")["pixel_values"]
+        if isinstance(img, list):
+            img = torch.stack(img)
+        return {"images": img.to(self.model_dtype),
+                "report_text": report_from_record(rec)}
 
 
-# ── LoRA setup ────────────────────────────────────────────────────────────────
+# ── LoRA ──────────────────────────────────────────────────────────────────────
 
 def build_lora_model(model, lora_cfg):
-    """Attach a LoRA adapter scoped to the language-model attention only."""
-    # Restrict targets to the LLM tower — exclude the vision tower, which also
-    # has q_proj/v_proj modules that must stay frozen.
+    """LoRA scoped to the language-model attention (vision tower stays frozen)."""
     suffixes = tuple(lora_cfg["target_modules"])
-    target_names = [
-        name for name, _ in model.named_modules()
-        if ".llm." in name and name.endswith(suffixes)
-    ]
-    if not target_names:
-        raise RuntimeError(
-            "No LoRA target modules found under model.llm — check that the "
-            "VILA-M3 checkpoint loaded correctly."
-        )
-
-    lora_config = LoraConfig(
-        r=lora_cfg["r"],
-        lora_alpha=lora_cfg["alpha"],
-        lora_dropout=lora_cfg["dropout"],
-        target_modules=target_names,
-        bias=lora_cfg["bias"],
-        task_type=TaskType.CAUSAL_LM,
+    targets = [n for n, _ in model.named_modules()
+               if ".llm." in n and n.endswith(suffixes)]
+    if not targets:
+        raise RuntimeError("No LoRA targets found under model.llm")
+    cfg = LoraConfig(
+        r=lora_cfg["r"], lora_alpha=lora_cfg["alpha"],
+        lora_dropout=lora_cfg["dropout"], target_modules=targets,
+        bias=lora_cfg["bias"], task_type=TaskType.CAUSAL_LM,
     )
-    model = get_peft_model(model, lora_config)
+    model = get_peft_model(model, cfg)
     model.print_trainable_parameters()
     return model
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
+# ── Objectives ────────────────────────────────────────────────────────────────
+
+def detection_loss(model, sample, device):
+    """Causal-LM loss for one detection-routing sample."""
+    out = model(
+        input_ids=sample["input_ids"].unsqueeze(0).to(device),
+        attention_mask=sample["attention_mask"].unsqueeze(0).to(device),
+        labels=sample["labels"].unsqueeze(0).to(device),
+        images=sample["images"].to(device),
+        return_dict=True,
+    )
+    return out.loss
+
+
+def _embed(model, tokenizer, text, images, device):
+    """Differentiable last-token embedding (image side or text side)."""
+    from llava.mm_utils import tokenizer_image_token
+
+    if images is not None:
+        prompt = "<image>\n" * images.shape[0] + text
+        input_ids = tokenizer_image_token(
+            prompt, tokenizer, return_tensors="pt").unsqueeze(0).to(device)
+        image_arg = images.to(device)
+    else:
+        input_ids = tokenizer(text, return_tensors="pt", truncation=True,
+                              max_length=512).input_ids.to(device)
+        image_arg = None
+    out = model(
+        input_ids=input_ids,
+        attention_mask=torch.ones_like(input_ids),
+        images=image_arg,
+        labels=input_ids,                       # VILA needs labels (loss unused)
+        output_hidden_states=True,
+        return_dict=True,
+    )
+    return out.hidden_states[-1][0, -1, :]      # last-token hidden state
+
+
+def contrastive_loss(model, tokenizer, batch, temperature, device):
+    """CLIP-style symmetric InfoNCE over a batch of (slices, report) pairs."""
+    img_embs, txt_embs = [], []
+    for vol in batch:
+        img_embs.append(_embed(model, tokenizer, RETRIEVAL_IMAGE_PROMPT,
+                               vol["images"], device))
+        txt_embs.append(_embed(model, tokenizer, vol["report_text"], None, device))
+
+    img = F.normalize(torch.stack(img_embs).float(), dim=-1)
+    txt = F.normalize(torch.stack(txt_embs).float(), dim=-1)
+    logits = img @ txt.t() / temperature
+    target = torch.arange(len(batch), device=device)
+    return 0.5 * (F.cross_entropy(logits, target)
+                  + F.cross_entropy(logits.t(), target))
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/train_config.yaml")
     p.add_argument("--data_path", default="~/icsdg_data/processed/ctrate_train.json")
-    p.add_argument("--vila_repo", default="./VLM-Radiology-Agent-Framework",
-                   help="Path to the VLM-Radiology-Agent-Framework repo root")
-    p.add_argument("--resume_from", default=None)
+    p.add_argument("--vila_repo", default="./VLM-Radiology-Agent-Framework")
     return p.parse_args()
 
 
@@ -239,70 +269,89 @@ def main():
         cfg = yaml.safe_load(f)
     set_seed(cfg["train"]["seed"])
 
-    from llava.model.builder import load_pretrained_model  # noqa
-    from llava.constants import IGNORE_INDEX  # noqa
+    from llava.model.builder import load_pretrained_model
 
-    model_name = cfg["model"]["name"]
-    print(f"Loading VILA-M3: {model_name}")
+    print(f"Loading VILA-M3: {cfg['model']['name']}")
     tokenizer, model, image_processor, _ = load_pretrained_model(
-        model_path=model_name,
-        model_name="llava_llama",
-        model_base=None,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-    )
+        model_path=cfg["model"]["name"], model_name="llava_llama",
+        model_base=None, device_map="auto", torch_dtype=torch.bfloat16)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = build_lora_model(model, cfg["lora"])
     model.config.use_cache = False
+    model.gradient_checkpointing_enable()
+    model.enable_input_require_grads()
+    model.train()
+    device = "cuda"
 
-    dataset = CTRATEInstructionDataset(
-        data_path=str(Path(args.data_path).expanduser()),
-        tokenizer=tokenizer,
-        image_processor=image_processor,
-        processed_root=cfg["data"]["processed_root"],
-        max_slices=cfg["data"]["max_slices"],
-    )
-    print(f"Detection-routing training samples: {len(dataset)}")
+    with open(Path(args.data_path).expanduser()) as f:
+        records = json.load(f)
 
-    collator = MultimodalCollator(tokenizer.pad_token_id, IGNORE_INDEX)
+    tcfg, ccfg = cfg["train"], cfg["contrastive"]
+    det_ds = DetectionDataset(records, tokenizer, image_processor,
+                              cfg["data"]["processed_root"], cfg["data"]["max_slices"])
+    ret_ds = RetrievalDataset(records, image_processor,
+                              cfg["data"]["processed_root"], ccfg["retrieval_slices"])
+    print(f"Detection samples: {len(det_ds)} | Retrieval volumes: {len(ret_ds)}")
 
-    train_cfg = cfg["train"]
-    training_args = TrainingArguments(
-        output_dir=train_cfg["output_dir"],
-        num_train_epochs=train_cfg["num_epochs"],
-        per_device_train_batch_size=train_cfg["per_device_batch_size"],
-        gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
-        learning_rate=train_cfg["learning_rate"],
-        lr_scheduler_type=train_cfg["lr_scheduler"],
-        warmup_ratio=train_cfg["warmup_ratio"],
-        weight_decay=train_cfg["weight_decay"],
-        max_grad_norm=train_cfg["max_grad_norm"],
-        bf16=train_cfg["bf16"],
-        save_strategy=train_cfg["save_strategy"],
-        save_total_limit=train_cfg.get("save_total_limit", 1),
-        logging_steps=train_cfg["logging_steps"],
-        dataloader_num_workers=train_cfg["dataloader_num_workers"],
-        remove_unused_columns=False,
-        report_to="none",
-        seed=train_cfg["seed"],
-    )
+    nw = tcfg["dataloader_num_workers"]
+    det_loader = DataLoader(det_ds, batch_size=1, shuffle=True,
+                            num_workers=nw, collate_fn=lambda b: b[0])
+    ret_loader = DataLoader(ret_ds, batch_size=ccfg["batch_size"], shuffle=True,
+                            num_workers=nw, collate_fn=list, drop_last=True)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=dataset,
-        data_collator=collator,
-    )
+    def ret_stream():
+        while True:
+            for b in ret_loader:
+                yield b
+    ret_iter = ret_stream()
 
-    print("Starting training ...")
-    trainer.train(resume_from_checkpoint=args.resume_from)
+    grad_accum = tcfg["gradient_accumulation_steps"]
+    steps_per_epoch = len(det_loader) // grad_accum
+    total_steps = steps_per_epoch * tcfg["num_epochs"]
+    warmup = int(total_steps * tcfg["warmup_ratio"])
 
-    adapter_path = Path(train_cfg["output_dir"]) / "lora_adapter_final"
-    model.save_pretrained(str(adapter_path))
-    tokenizer.save_pretrained(str(adapter_path))
-    print(f"\nLoRA adapter saved to {adapter_path}")
+    params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(params, lr=tcfg["learning_rate"],
+                                  weight_decay=tcfg["weight_decay"])
+    scheduler = get_cosine_schedule_with_warmup(optimizer, warmup, total_steps)
+    print(f"Optimiser steps: {total_steps} ({steps_per_epoch}/epoch), warmup {warmup}")
+
+    global_step = 0
+    for epoch in range(tcfg["num_epochs"]):
+        det_iter = iter(det_loader)
+        pbar = tqdm(range(steps_per_epoch), desc=f"epoch {epoch + 1}")
+        for _ in pbar:
+            optimizer.zero_grad()
+
+            det_total = 0.0
+            for _ in range(grad_accum):
+                loss = detection_loss(model, next(det_iter), device) / grad_accum
+                loss.backward()
+                det_total += loss.item()
+
+            closs = contrastive_loss(model, tokenizer, next(ret_iter),
+                                     ccfg["temperature"], device) * ccfg["loss_weight"]
+            closs.backward()
+
+            torch.nn.utils.clip_grad_norm_(params, tcfg["max_grad_norm"])
+            optimizer.step()
+            scheduler.step()
+            global_step += 1
+
+            if global_step % tcfg["logging_steps"] == 0 or global_step == 1:
+                pbar.set_postfix(det_loss=f"{det_total:.3f}",
+                                 con_loss=f"{closs.item():.3f}")
+
+        ckpt = Path(tcfg["output_dir"]) / f"epoch_{epoch + 1}"
+        model.save_pretrained(str(ckpt))
+        print(f"  checkpoint saved -> {ckpt}")
+
+    final = Path(tcfg["output_dir"]) / "lora_adapter_final"
+    model.save_pretrained(str(final))
+    tokenizer.save_pretrained(str(final))
+    print(f"\nLoRA adapter saved to {final}")
 
 
 if __name__ == "__main__":

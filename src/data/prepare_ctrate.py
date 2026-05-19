@@ -187,6 +187,7 @@ def make_detection_record(volume_id, slice_paths, findings) -> dict:
         "volume_id": volume_id,
         "images": slice_paths,
         "routes": bool(_PULMONARY_RE.search(findings)),
+        "report_text": findings.strip(),       # used by the contrastive objective
         "conversations": [
             {"from": "human", "value": prompt},
             {"from": "gpt", "value": response},
