@@ -151,6 +151,14 @@ def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_proc
         )
     response = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
+    if getattr(run_via_vlm, "_dbg", 0) < 3:
+        run_via_vlm._dbg = getattr(run_via_vlm, "_dbg", 0) + 1
+        print(f"\n[debug] output_ids shape={tuple(output_ids.shape)} "
+              f"first20={output_ids[0][:20].tolist()}")
+        print(f"[debug] raw decode: "
+              f"{tokenizer.batch_decode(output_ids, skip_special_tokens=False)[0]!r}")
+        print(f"[debug] input_ids len={input_ids.shape[1]}\n")
+
     if "VISTA3D" in response and "lung tumor" in response.lower():
         mask = call_vista3d(record.get("nii_path", ""), output_dir, vista3d)
         return mask, True, response
