@@ -189,7 +189,7 @@ def main():
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    processed_root = Path(cfg["data"]["processed_root"])
+    processed_root = Path(cfg["data"]["processed_root"]).expanduser()
     vila_repo = str(Path(args.vila_repo).expanduser())
     for p in [vila_repo, f"{vila_repo}/m3", f"{vila_repo}/m3/demo",
               f"{vila_repo}/thirdparty/VILA"]:
