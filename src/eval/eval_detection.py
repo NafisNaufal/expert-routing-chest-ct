@@ -142,7 +142,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config",       default="configs/train_config.yaml")
     p.add_argument("--eval_json",    default="/data/processed/lidc_eval.json")
-    p.add_argument("--vila_repo",    default="../VLM-Radiology-Agent-Framework")
+    p.add_argument("--vila_repo",    default="./VLM-Radiology-Agent-Framework")
     p.add_argument("--model_path",   default="MONAI/Llama3-VILA-M3-8B")
     p.add_argument("--lora_adapter", default=None)
     p.add_argument("--condition",
