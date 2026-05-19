@@ -99,6 +99,48 @@ def download_via_tcia_utils(dicom_home: Path, max_series: int = 0) -> None:
     print(f"\nDICOM download complete: {dicom_home}")
 
 
+# ── Reorganise DICOMs into the layout pylidc expects ──────────────────────────
+
+def reorganize_for_pylidc(dicom_home: Path) -> None:
+    """
+    tcia_utils downloads each series into a flat <series-UID>/ folder, but
+    pylidc locates DICOMs at <dicom_path>/<patient-id>/<study-UID>/<series-UID>/.
+    This restructures the flat folders in place. Idempotent — already-organised
+    LIDC-IDRI-* directories are left untouched.
+    """
+    import pydicom
+
+    flat_dirs = []
+    for d in dicom_home.iterdir():
+        if not d.is_dir() or d.name.startswith("LIDC-IDRI"):
+            continue
+        if any(d.glob("*.dcm")):
+            flat_dirs.append(d)
+
+    if not flat_dirs:
+        print("DICOMs already in pylidc layout — nothing to reorganise")
+        return
+
+    moved = 0
+    for sdir in flat_dirs:
+        dcms = list(sdir.glob("*.dcm"))
+        try:
+            ds = pydicom.dcmread(str(dcms[0]), stop_before_pixels=True)
+            patient = str(ds.PatientID).strip()
+            study = str(ds.StudyInstanceUID).strip()
+            series = str(ds.SeriesInstanceUID).strip()
+        except Exception as e:
+            print(f"  Warning: cannot read {sdir.name}: {e}")
+            continue
+        target = dicom_home / patient / study / series
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        sdir.rename(target)
+        moved += 1
+    print(f"Reorganised {moved} series into <patient>/<study>/<series>/ layout")
+
+
 # ── pylidc annotation index ───────────────────────────────────────────────────
 
 def configure_pylidc(dicom_home: str) -> None:
@@ -196,6 +238,7 @@ def main():
                 f"--skip_download set but {dicom_home} does not exist."
             )
 
+    reorganize_for_pylidc(dicom_home)
     configure_pylidc(str(dicom_home))
     build_annotation_index(output_dir)
 
