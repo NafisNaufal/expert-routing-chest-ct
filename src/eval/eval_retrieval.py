@@ -4,7 +4,10 @@ eval_retrieval.py
 Text-to-image case retrieval on the CT-RATE hold-out split.
 
 VILA-M3 is a generative VLM, not a dual-encoder. We obtain retrieval
-embeddings from its last-layer hidden states (mean-pooled):
+embeddings from the last token of its last-layer hidden state — the standard
+pooling for decoder-only LLM embeddings (the model has attended over the whole
+input by the final position; mean-pooling instead dilutes the signal with the
+identical system-prompt tokens shared by every sample):
 
   * Index side  : key CT slices + a neutral prompt  -> image-conditioned vector
   * Query side  : the radiology report text only    -> text vector
@@ -69,7 +72,7 @@ def init_process_group_if_needed() -> None:
 @torch.no_grad()
 def embed(model, tokenizer, image_processor, text, images, device):
     """
-    Mean-pooled, L2-normalised last-hidden-state embedding.
+    Last-token, L2-normalised last-hidden-state embedding.
     `images` is a list of PIL images (image side) or None (text side).
     """
     from llava.mm_utils import tokenizer_image_token
@@ -103,7 +106,7 @@ def embed(model, tokenizer, image_processor, text, images, device):
         return_dict=True,
     )
     hidden = outputs.hidden_states[-1]          # (1, seq_len, hidden_dim)
-    emb = hidden.mean(dim=1).squeeze(0).float().cpu().numpy()
+    emb = hidden[0, -1, :].float().cpu().numpy()   # last-token pooling
     norm = np.linalg.norm(emb)
     return emb / norm if norm > 0 else emb
 
