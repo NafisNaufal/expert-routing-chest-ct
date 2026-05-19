@@ -46,6 +46,7 @@ scikit-image==0.22.0
 
 # --- medical imaging ---
 monai==1.4.0             # 1.4+ required for the VISTA3D network (vista3d132)
+pytorch-ignite==0.4.11   # MONAI engine dependency — VISTA3D bundle uses Evaluator
 nibabel==5.2.1
 pydicom==2.4.4
 pylidc==0.2.3

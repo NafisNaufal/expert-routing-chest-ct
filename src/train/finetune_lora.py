@@ -185,7 +185,7 @@ def build_lora_model(model, lora_cfg):
     """LoRA scoped to the language-model attention (vision tower stays frozen)."""
     suffixes = tuple(lora_cfg["target_modules"])
     targets = [n for n, _ in model.named_modules()
-               if ".llm." in n and n.endswith(suffixes)]
+               if "llm" in n.split(".") and n.endswith(suffixes)]
     if not targets:
         raise RuntimeError("No LoRA targets found under model.llm")
     cfg = LoraConfig(
