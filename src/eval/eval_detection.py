@@ -94,7 +94,7 @@ def call_vista3d(nii_path: str, output_dir: Path, vista3d_expert) -> np.ndarray 
 def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_processor, vista3d, device):
     """
     Run VILA-M3. If the model emits <VISTA3D(lung tumor)>, intercept and
-    call VISTA3D. Returns (mask_or_None, was_routed).
+    call VISTA3D. Returns (mask_or_None, was_routed, response_text).
     """
     from PIL import Image as PILImage
 
@@ -104,7 +104,7 @@ def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_proc
         if (processed_root / rel).exists()
     ]
     if not images:
-        return None, False
+        return None, False, ""
 
     from llava.mm_utils import tokenizer_image_token  # type: ignore
     from llava.conversation import conv_templates  # type: ignore
@@ -127,13 +127,14 @@ def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_proc
 
     with torch.no_grad():
         out = model.generate(input_ids, images=image_tensor, max_new_tokens=128)
-    response = tokenizer.decode(out[0], skip_special_tokens=False)
+    # VILA's generate returns only the newly generated tokens.
+    response = tokenizer.decode(out[0], skip_special_tokens=True).strip()
 
     if "VISTA3D" in response and "lung tumor" in response.lower():
         mask = call_vista3d(record.get("nii_path", ""), output_dir, vista3d)
-        return mask, True
+        return mask, True, response
 
-    return None, False
+    return None, False, response
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -196,6 +197,7 @@ def main():
 
     all_dice, all_iou = [], []
     routed_count = 0
+    sample_responses = []
 
     for record in tqdm(eval_records, desc="Evaluating"):
         import tempfile
@@ -212,10 +214,13 @@ def main():
                 pred_mask = call_vista3d(record.get("nii_path", ""), tmp_path, vista3d)
                 routed = pred_mask is not None
             else:
-                pred_mask, routed = run_via_vlm(
+                pred_mask, routed, response = run_via_vlm(
                     record, processed_root, tmp_path, model,
                     tokenizer, image_processor, vista3d, device
                 )
+                if len(sample_responses) < 5:
+                    sample_responses.append(response)
+                    print(f"\n[response {len(sample_responses)}] {response!r}\n")
 
             if routed:
                 routed_count += 1
