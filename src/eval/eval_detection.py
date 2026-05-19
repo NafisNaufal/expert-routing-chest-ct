@@ -87,7 +87,12 @@ def call_vista3d(nii_path: str, output_dir: Path, vista3d_expert) -> np.ndarray 
             data = nib.load(str(seg_path)).get_fdata()
             return (data == 23).astype(np.uint8)   # label 23 = lung tumor
     except Exception as e:
-        print(f"  VISTA3D error: {e}")
+        import traceback
+        if getattr(call_vista3d, "_dbg", 0) < 1:
+            call_vista3d._dbg = 1
+            print("  VISTA3D FULL TRACEBACK:\n" + traceback.format_exc())
+        else:
+            print(f"  VISTA3D error: {e}")
     return None
 
 
