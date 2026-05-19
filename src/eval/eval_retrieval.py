@@ -77,11 +77,14 @@ def embed(model, tokenizer, image_processor, text, images, device):
                               max_length=512).input_ids.to(device)
         image_arg = None
 
-    # VILA's forward multiplies outputs.loss by a weight, so labels must be
-    # passed (otherwise loss is None and the multiply crashes). The loss value
-    # itself is unused here.
+    # VILA's forward needs an explicit attention_mask (it calls
+    # attention_mask.sum(-1) and won't synthesise one), and it multiplies
+    # outputs.loss by a weight so labels must be passed too. Both the loss and
+    # the mask values are otherwise unused here.
+    attention_mask = torch.ones_like(input_ids)
     outputs = model(
         input_ids=input_ids,
+        attention_mask=attention_mask,
         images=image_arg,
         labels=input_ids,
         output_hidden_states=True,

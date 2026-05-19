@@ -146,12 +146,13 @@ def reorganize_for_pylidc(dicom_home: Path) -> None:
 def configure_pylidc(dicom_home: str) -> None:
     import configparser
 
+    # pylidc expects exactly:  [dicom] / path = ...
     config = configparser.ConfigParser()
-    config["pylidc"] = {"dicom_path": dicom_home}
+    config["dicom"] = {"path": dicom_home}
     cfg_path = Path.home() / ".pylidcrc"
     with open(cfg_path, "w") as f:
         config.write(f)
-    print(f"pylidc configured → dicom_path: {dicom_home}")
+    print(f"pylidc configured → [dicom] path = {dicom_home}")
 
 
 def build_annotation_index(output_dir: Path) -> None:
