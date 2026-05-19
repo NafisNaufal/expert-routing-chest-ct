@@ -113,9 +113,11 @@ class DetectionDataset(Dataset):
         conv.append_message(conv.roles[1], gpt)
         full = conv.get_prompt()
 
+        # Empty-string (not None) assistant turn -> get_prompt() ends exactly
+        # at the assistant header, giving a clean prefix for loss masking.
         conv_p = conv_templates["llama_3"].copy()
         conv_p.append_message(conv_p.roles[0], human)
-        conv_p.append_message(conv_p.roles[1], None)
+        conv_p.append_message(conv_p.roles[1], "")
         prefix = conv_p.get_prompt()
 
         full_ids = tokenizer_image_token(full, self.tokenizer, return_tensors="pt")

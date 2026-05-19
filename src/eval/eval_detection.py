@@ -117,7 +117,14 @@ def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_proc
     )
     conv = conv_templates["llama_3"].copy()
     conv.append_message(conv.roles[0], prompt_text)
-    conv.append_message(conv.roles[1], None)
+    # LLAMA_3 needs an empty-STRING assistant turn (not None) so get_prompt()
+    # renders the generation-ready prompt ending at the assistant header.
+    # With None the header is omitted and the model emits the stop token
+    # immediately (empty output). See m3/demo/gradio_m3.py.
+    if conv.sep_style == SeparatorStyle.LLAMA_3:
+        conv.append_message(conv.roles[1], "")
+    else:
+        conv.append_message(conv.roles[1], None)
     prompt = conv.get_prompt()
 
     # Mirror the canonical VILA inference path (llava/eval/run_vila.py):
@@ -137,8 +144,10 @@ def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_proc
             images=[images_tensor],
             do_sample=False,
             max_new_tokens=128,
+            min_new_tokens=2,
             use_cache=True,
             stopping_criteria=[stopping],
+            pad_token_id=tokenizer.eos_token_id,
         )
     response = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
