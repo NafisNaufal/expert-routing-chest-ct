@@ -222,6 +222,8 @@ def detection_loss(model, sample, device):
     (_, _, attention_mask, _, inputs_embeds, new_labels) = \
         base.prepare_inputs_labels_for_multimodal(
             input_ids, None, attention_mask, None, labels, images)
+    # GC needs an input that requires grad; the hook can miss through this path.
+    inputs_embeds.requires_grad_(True)
 
     out = base.llm(
         inputs_embeds=inputs_embeds,
@@ -258,6 +260,7 @@ def _embed(model, tokenizer, text, images, device):
                               max_length=512).input_ids.to(device)
         attn = torch.ones_like(input_ids)
         inputs_embeds = base.get_input_embeddings()(input_ids).to(base.dtype)
+    inputs_embeds.requires_grad_(True)          # GC needs grad on inputs.
 
     out = base.llm.model(                       # LlamaModel body — no lm_head.
         inputs_embeds=inputs_embeds,
