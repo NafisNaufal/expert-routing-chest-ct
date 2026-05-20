@@ -323,7 +323,11 @@ def main():
 
     model = build_lora_model(model, cfg["lora"])
     model.config.use_cache = False
-    model.gradient_checkpointing_enable()
+    # Enable GC ONLY on the LLM body. Recursive enable on the whole model
+    # also turns it on for the frozen vision tower, whose inputs never require
+    # grad -> spurious "Gradients will be None" warning and wasted compute.
+    _base = model.get_base_model() if hasattr(model, "get_base_model") else model
+    _base.llm.gradient_checkpointing_enable()
     model.enable_input_require_grads()
     # Train mode is REQUIRED — HF's LlamaModel only activates gradient
     # checkpointing when self.training=True. Eval mode silently disables GC,
