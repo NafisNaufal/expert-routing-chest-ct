@@ -213,27 +213,39 @@ def detection_loss(model, sample, device):
 
 
 def _embed(model, tokenizer, text, images, device):
-    """Differentiable last-token embedding (image side or text side)."""
+    """Differentiable last-token embedding (image side or text side).
+
+    Bypasses the lm_head + cross-entropy by calling the LLaMA body directly:
+    the full VILA forward would otherwise allocate logits of shape
+    (1, seq_len, 128k vocab) -> ~525 MB per sample even though we only need
+    one hidden vector. LoRA adapters live inside the LLM attention layers,
+    so gradients still flow through them.
+    """
     from llava.mm_utils import tokenizer_image_token
+
+    base = model.get_base_model() if hasattr(model, "get_base_model") else model
 
     if images is not None:
         prompt = "<image>\n" * images.shape[0] + text
         input_ids = tokenizer_image_token(
             prompt, tokenizer, return_tensors="pt").unsqueeze(0).to(device)
-        image_arg = images.to(device)
+        attn = torch.ones_like(input_ids)
+        # Use VILA's helper to fuse image features into inputs_embeds.
+        (_, _, attn, _, inputs_embeds, _) = base.prepare_inputs_labels_for_multimodal(
+            input_ids, None, attn, None, None, images.to(device))
     else:
         input_ids = tokenizer(text, return_tensors="pt", truncation=True,
                               max_length=512).input_ids.to(device)
-        image_arg = None
-    out = model(
-        input_ids=input_ids,
-        attention_mask=torch.ones_like(input_ids),
-        images=image_arg,
-        labels=input_ids,                       # VILA needs labels (loss unused)
-        output_hidden_states=True,
+        attn = torch.ones_like(input_ids)
+        inputs_embeds = base.get_input_embeddings()(input_ids).to(base.dtype)
+
+    out = base.llm.model(                       # LlamaModel body — no lm_head.
+        inputs_embeds=inputs_embeds,
+        attention_mask=attn,
+        output_hidden_states=False,
         return_dict=True,
     )
-    return out.hidden_states[-1][0, -1, :]      # last-token hidden state
+    return out.last_hidden_state[0, -1, :]      # last-token hidden state
 
 
 def contrastive_loss(model, tokenizer, batch, temperature, device):

@@ -51,7 +51,7 @@ train:
 # volume's image embedding with its radiology-report embedding.
 contrastive:
   retrieval_slices: 8       # key slices for the retrieval embedding (fewer = larger batch)
-  batch_size: 8             # InfoNCE in-batch negatives = batch_size - 1
+  batch_size: 8             # InfoNCE in-batch negatives = batch_size - 1 (lower if OOM)
   temperature: 0.07         # InfoNCE softmax temperature
   loss_weight: 1.0          # weight of the contrastive loss vs. the detection LM loss
 
