@@ -302,11 +302,13 @@ def main():
     model.config.use_cache = False
     model.gradient_checkpointing_enable()
     model.enable_input_require_grads()
-    # Keep the model in eval mode: VILA's training-mode repack_multimodal_data
-    # path requires inputs_embeds (None for text-only forwards) and only packs
-    # sequences for throughput — irrelevant at batch size 1. Gradients still
-    # flow into the LoRA params; only dropout is disabled.
-    model.eval()
+    # Train mode is REQUIRED — HF's LlamaModel only activates gradient
+    # checkpointing when self.training=True. Eval mode silently disables GC,
+    # which costs ~10x more activation memory and causes OOM. VILA's
+    # training-mode repack path is fine for detection (we set pad_token_id),
+    # and `_embed` bypasses VILA's forward entirely (calls llm.model directly)
+    # so the text-only repack bug never triggers.
+    model.train()
     device = "cuda"
 
     with open(Path(args.data_path).expanduser()) as f:
