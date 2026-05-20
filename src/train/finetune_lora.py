@@ -79,7 +79,7 @@ class DetectionDataset(Dataset):
 
     def __init__(self, records, tokenizer, image_processor, processed_root,
                  max_slices, max_length=2048, model_dtype=torch.bfloat16):
-        from llava.constants import IGNORE_INDEX
+        from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX
         self.records = [r for r in records if r.get("type") == "detection"]
         self.tokenizer = tokenizer
         self.image_processor = image_processor
@@ -88,6 +88,7 @@ class DetectionDataset(Dataset):
         self.max_length = max_length
         self.model_dtype = model_dtype
         self.ignore_index = IGNORE_INDEX
+        self.image_token_index = IMAGE_TOKEN_INDEX
 
     def __len__(self):
         return len(self.records)
@@ -127,6 +128,9 @@ class DetectionDataset(Dataset):
 
         labels = full_ids.clone()
         labels[: min(prefix_ids.shape[0], full_ids.shape[0])] = self.ignore_index
+        # Image-token placeholders (-200) must become IGNORE_INDEX or CE will
+        # try to index logits[..., -200] -> out-of-bounds -> nan loss.
+        labels[labels == self.image_token_index] = self.ignore_index
 
         if images:
             img = self.image_processor.preprocess(
