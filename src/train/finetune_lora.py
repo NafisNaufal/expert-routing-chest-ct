@@ -393,9 +393,9 @@ def main():
             scheduler.step()
             global_step += 1
 
-            if global_step % tcfg["logging_steps"] == 0 or global_step == 1:
-                pbar.set_postfix(det_loss=f"{det_total:.3f}",
-                                 con_loss=f"{closs.item():.3f}")
+            # Refresh postfix every step (cheap) so losses are visible live.
+            pbar.set_postfix(det_loss=f"{det_total:.3f}",
+                             con_loss=f"{closs.item():.3f}")
 
         ckpt = Path(tcfg["output_dir"]) / f"epoch_{epoch + 1}"
         model.save_pretrained(str(ckpt))
