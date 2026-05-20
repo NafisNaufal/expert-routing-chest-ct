@@ -22,7 +22,7 @@ data:
   lidc_root: "~/icsdg_data/lidc_idri"          # LIDC-IDRI volumes (NIfTI, kept for eval)
   processed_root: "~/icsdg_data/processed"     # extracted slices + JSON records
   holdout_fraction: 0.10                       # fraction of CT-RATE kept for retrieval eval
-  max_volumes: 2000                            # CT-RATE train volumes to stream+process
+  max_volumes: 10000                           # CT-RATE train volumes to stream+process
   max_lidc_scans: 150                          # LIDC-IDRI scans for zero-shot eval
   max_slices: 16                               # key axial slices sampled per volume
   slice_size: 224                              # resize slices to this resolution
@@ -30,7 +30,7 @@ data:
 # ── Training ─────────────────────────────────────────────────────────────────
 train:
   output_dir: "./checkpoints"
-  num_epochs: 3
+  num_epochs: 2
   per_device_batch_size: 1              # multimodal samples vary in #images — keep at 1
   gradient_accumulation_steps: 4        # effective batch size = 4
   learning_rate: 1.0e-4

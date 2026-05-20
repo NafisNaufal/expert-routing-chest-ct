@@ -278,19 +278,26 @@ def main():
         findings = extract_findings(report_text)
         slope, intercept = metadata_index.get(volume_id, (1.0, 0.0))
 
-        task_tmp = Path(tempfile.mkdtemp(prefix="ctv_"))
-        try:
-            local = hf_hub_download(
-                repo_id=REPO_ID, repo_type="dataset", filename=rel_path,
-                token=token, cache_dir=str(task_tmp))
-            slice_paths = process_volume(
-                Path(local), slope, intercept, args.max_slices,
-                slices_dir, volume_id, args.slice_size)
-        except Exception as e:
-            print(f"  Warning: skipping {volume_id}: {e}")
-            return None
-        finally:
-            shutil.rmtree(task_tmp, ignore_errors=True)
+        # Idempotency: if every expected slice for this volume is already on
+        # disk from a previous run, skip download/processing entirely.
+        expected = [slices_dir / f"{volume_id}_{i:02d}.png"
+                    for i in range(args.max_slices)]
+        if all(p.exists() for p in expected):
+            slice_paths = [f"slices/{p.name}" for p in expected]
+        else:
+            task_tmp = Path(tempfile.mkdtemp(prefix="ctv_"))
+            try:
+                local = hf_hub_download(
+                    repo_id=REPO_ID, repo_type="dataset", filename=rel_path,
+                    token=token, cache_dir=str(task_tmp))
+                slice_paths = process_volume(
+                    Path(local), slope, intercept, args.max_slices,
+                    slices_dir, volume_id, args.slice_size)
+            except Exception as e:
+                print(f"  Warning: skipping {volume_id}: {e}")
+                return None
+            finally:
+                shutil.rmtree(task_tmp, ignore_errors=True)
 
         if rel_path in holdout_set:
             return "holdout", make_retrieval_record(volume_id, slice_paths, findings)
