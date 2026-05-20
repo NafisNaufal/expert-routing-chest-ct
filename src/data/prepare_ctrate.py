@@ -212,7 +212,7 @@ def parse_args():
     p.add_argument("--ctrate_root", default="~/icsdg_data/ct_rate")
     p.add_argument("--output_root", default="~/icsdg_data/processed")
     p.add_argument("--hf_token", default=None)
-    p.add_argument("--max_volumes", type=int, default=2000)
+    p.add_argument("--max_volumes", type=int, default=10000)
     p.add_argument("--workers", type=int, default=8,
                    help="Parallel volume downloads (network-bound; 8 is safe)")
     p.add_argument("--max_slices", type=int, default=16)
