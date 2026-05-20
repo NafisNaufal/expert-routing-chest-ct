@@ -287,9 +287,14 @@ def main():
         else:
             task_tmp = Path(tempfile.mkdtemp(prefix="ctv_"))
             try:
+                # local_dir mode downloads straight to the path (no blob/symlink
+                # indirection). With cache_dir + hf_transfer there is a race
+                # where the blob arrives but the snapshot symlink isn't created,
+                # so the returned path doesn't exist when we try to open it.
                 local = hf_hub_download(
                     repo_id=REPO_ID, repo_type="dataset", filename=rel_path,
-                    token=token, cache_dir=str(task_tmp))
+                    token=token, local_dir=str(task_tmp),
+                    local_dir_use_symlinks=False)
                 slice_paths = process_volume(
                     Path(local), slope, intercept, args.max_slices,
                     slices_dir, volume_id, args.slice_size)
