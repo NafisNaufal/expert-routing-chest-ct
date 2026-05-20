@@ -205,12 +205,28 @@ def build_lora_model(model, lora_cfg):
 # ── Objectives ────────────────────────────────────────────────────────────────
 
 def detection_loss(model, sample, device):
-    """Causal-LM loss for one detection-routing sample."""
-    out = model(
-        input_ids=sample["input_ids"].unsqueeze(0).to(device),
-        attention_mask=sample["attention_mask"].unsqueeze(0).to(device),
-        labels=sample["labels"].unsqueeze(0).to(device),
-        images=sample["images"].to(device),
+    """Causal-LM loss for one detection-routing sample.
+
+    Bypasses VILA's training-mode wrapper (which routes through
+    repack_multimodal_data + calculate_loss_weight and was producing nan in
+    practice). We call prepare_inputs_labels_for_multimodal ourselves, then
+    base.llm (LlamaForCausalLM) for the standard lm_head + CE path. LoRA
+    adapters live inside base.llm, so gradients flow correctly.
+    """
+    base = model.get_base_model() if hasattr(model, "get_base_model") else model
+    input_ids = sample["input_ids"].unsqueeze(0).to(device)
+    attention_mask = sample["attention_mask"].unsqueeze(0).to(device)
+    labels = sample["labels"].unsqueeze(0).to(device)
+    images = sample["images"].to(device)
+
+    (_, _, attention_mask, _, inputs_embeds, new_labels) = \
+        base.prepare_inputs_labels_for_multimodal(
+            input_ids, None, attention_mask, None, labels, images)
+
+    out = base.llm(
+        inputs_embeds=inputs_embeds,
+        attention_mask=attention_mask,
+        labels=new_labels,
         return_dict=True,
     )
     return out.loss
