@@ -62,3 +62,4 @@ tqdm==4.66.4
 pyyaml==6.0.1
 Pillow==10.3.0
 matplotlib==3.8.4
+umap-learn==0.5.5            # for the embedding-space UMAP figure

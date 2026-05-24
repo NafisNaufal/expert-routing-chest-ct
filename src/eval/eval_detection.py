@@ -230,8 +230,9 @@ def main():
         model.eval()
 
     all_dice, all_iou = [], []
-    routed_count = 0
-    sample_responses = []
+    routed_count = 0           # responses with BOTH `<VISTA3D` AND `lung tumor` (correct class)
+    format_count = 0           # responses with `<VISTA3D` regardless of class (format-only)
+    all_responses = []         # full list of VLM responses for qualitative analysis
 
     for record in tqdm(eval_records, desc="Evaluating"):
         import tempfile
@@ -247,14 +248,17 @@ def main():
             if args.condition == "direct_vista3d":
                 pred_mask = call_vista3d(record.get("nii_path", ""), tmp_path, vista3d)
                 routed = pred_mask is not None
+                all_responses.append("")
             else:
                 pred_mask, routed, response = run_via_vlm(
                     record, processed_root, tmp_path, model,
                     tokenizer, image_processor, vista3d, device
                 )
-                if len(sample_responses) < 5:
-                    sample_responses.append(response)
-                    print(f"\n[response {len(sample_responses)}] {response!r}\n")
+                all_responses.append(response)
+                if "VISTA3D" in response:
+                    format_count += 1
+                if sum(1 for r in all_responses if r) <= 5:
+                    print(f"\n[response {sum(1 for r in all_responses if r)}] {response!r}\n")
 
             if routed:
                 routed_count += 1
@@ -271,13 +275,16 @@ def main():
 
     mean_dice = float(np.mean(all_dice)) if all_dice else 0.0
     mean_iou  = float(np.mean(all_iou))  if all_iou  else 0.0
-    routing_rate = routed_count / len(eval_records) if eval_records else 0.0
+    n = len(eval_records) if eval_records else 1
+    routing_rate = routed_count / n            # correct format AND correct class
+    format_rate  = format_count / n            # correct format, any class
 
     print(f"\n── Detection Results ({args.condition}) ──────────────────")
-    print(f"  Scans evaluated : {len(eval_records)}")
-    print(f"  Routing rate    : {routing_rate:.2%}  ({routed_count}/{len(eval_records)})")
-    print(f"  Mean Dice (DSC) : {mean_dice:.4f}")
-    print(f"  Mean IoU        : {mean_iou:.4f}")
+    print(f"  Scans evaluated   : {len(eval_records)}")
+    print(f"  Format rate       : {format_rate:.2%}  ({format_count}/{n})  [any <VISTA3D(...)>]")
+    print(f"  Routing rate      : {routing_rate:.2%}  ({routed_count}/{n})  [VISTA3D + lung tumor]")
+    print(f"  Mean Dice (DSC)   : {mean_dice:.4f}")
+    print(f"  Mean IoU          : {mean_iou:.4f}")
 
     output_path = Path(args.output_json or f"results/detection_{args.condition}.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -287,11 +294,13 @@ def main():
             "model":        args.model_path,
             "lora_adapter": args.lora_adapter,
             "n_scans":      len(eval_records),
+            "format_rate":  round(format_rate, 4),
             "routing_rate": round(routing_rate, 4),
             "mean_dice":    round(mean_dice, 4),
             "mean_iou":     round(mean_iou,  4),
-            "per_scan":     [{"dice": round(d, 4), "iou": round(i, 4)}
-                             for d, i in zip(all_dice, all_iou)],
+            "per_scan":     [{"dice": round(d, 4), "iou": round(i, 4),
+                              "response": r}
+                             for d, i, r in zip(all_dice, all_iou, all_responses)],
         }, f, indent=2)
     print(f"\nResults saved to {output_path}")
 

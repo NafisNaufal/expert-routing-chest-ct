@@ -288,12 +288,15 @@ def main():
             task_tmp = Path(tempfile.mkdtemp(prefix="ctv_"))
             try:
                 # local_dir mode downloads straight to the path (no blob/symlink
-                # indirection). With cache_dir + hf_transfer there is a race
-                # where the blob arrives but the snapshot symlink isn't created,
-                # so the returned path doesn't exist when we try to open it.
+                # indirection). Pass cache_dir=task_tmp as well -- otherwise
+                # huggingface_hub still stages every blob in the default
+                # ~/.cache/huggingface/hub/ alongside the local copy, silently
+                # filling the home partition (this bit us at 7350/10000).
                 local = hf_hub_download(
                     repo_id=REPO_ID, repo_type="dataset", filename=rel_path,
-                    token=token, local_dir=str(task_tmp),
+                    token=token,
+                    cache_dir=str(task_tmp),
+                    local_dir=str(task_tmp),
                     local_dir_use_symlinks=False)
                 slice_paths = process_volume(
                     Path(local), slope, intercept, args.max_slices,
@@ -313,7 +316,13 @@ def main():
         futures = [ex.submit(fetch_and_process, p) for p in all_volumes]
         for fut in tqdm(as_completed(futures), total=len(futures),
                         desc="Streaming volumes"):
-            result = fut.result()
+            try:
+                result = fut.result()
+            except Exception as e:
+                # Don't let one worker's failure (e.g. disk-full mkdtemp)
+                # bring down the whole executor; just log and continue.
+                print(f"  Worker error: {e}")
+                continue
             if result is None:
                 continue
             kind, rec = result

@@ -142,6 +142,9 @@ def parse_args():
     p.add_argument("--lora_adapter", default=None,
                    help="Path to a saved LoRA adapter; omit for the baseline")
     p.add_argument("--output_json", default="results/retrieval_results.json")
+    p.add_argument("--save_embeddings", default=None,
+                   help="If set, also save raw image- and text-side embeddings "
+                        "to this .npz path (for UMAP / qualitative analysis).")
     p.add_argument("--vila_repo", default="./VLM-Radiology-Agent-Framework")
     return p.parse_args()
 
@@ -205,6 +208,13 @@ def main():
     index_emb = np.stack(index_emb)
     query_emb = np.stack(query_emb)
     print(f"Embedded {len(ids)} volumes (dim {index_emb.shape[1]})")
+
+    if args.save_embeddings:
+        out = Path(args.save_embeddings).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(out, image_emb=index_emb, text_emb=query_emb,
+                 ids=np.array(ids, dtype=object))
+        print(f"Embeddings saved to {out}")
 
     recall = compute_recall_at_k(query_emb, index_emb, ids, ids, k_values)
     print("\n── Retrieval Results ──────────────────────")

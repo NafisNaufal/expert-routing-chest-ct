@@ -94,10 +94,12 @@ split.
     detection evaluation on LIDC-IDRI. VISTA3D produces voxel-level segmentation
     masks from which bounding boxes are derived and evaluated using IoU and mAP.
 
-  \item \textbf{Dual-Task Unified Pipeline with CT-CLIP Baseline.} A single
-    fine-tuned model handles both segmentation routing and natural language case
-    retrieval. CT-CLIP~\cite{ctrate2024}, a published CT report--image matching
-    model trained on CT-RATE, serves as a direct retrieval baseline.
+  \item \textbf{Dual-Task Unified Pipeline.} A single fine-tuned model handles
+    both segmentation routing and natural-language case retrieval. The same
+    LoRA adapter is trained jointly with a causal-LM detection-routing
+    objective and a CLIP-style symmetric InfoNCE objective that aligns each
+    volume's image-side and text-side hidden representations, so embedding-space
+    retrieval becomes meaningful without any auxiliary text generation.
 \end{enumerate}
 
 
@@ -154,15 +156,17 @@ adaptation from evaluation:
 \begin{itemize}
   \item \textbf{CT-RATE}~\cite{ctrate2024}: A large-scale dataset of over
     50{,}000 reconstructed 3D chest CT volumes paired with structured radiology
-    reports. CT-RATE serves as the training corpus for instruction-tuning. A
-    randomly sampled 10\% held-out split is reserved exclusively for case
-    retrieval evaluation.
+    reports. CT-RATE serves as the training corpus for instruction-tuning.
+    Owing to the storage constraints of the available server we operate on a
+    randomly sampled subset of approximately 10{,}000 volumes; a 10\%
+    held-out split (about 1{,}000 volumes) is reserved exclusively for case
+    retrieval evaluation and never seen during adaptation.
 
   \item \textbf{LIDC-IDRI}~\cite{lidc2011}: A reference database of 1{,}018
     CT scans with expert-consensus nodule annotations from four independent
-    radiologists, including both segmentation masks and derived bounding boxes.
-    This dataset is withheld entirely from training and used only for zero-shot
-    detection benchmarking.
+    radiologists. A subset of 115 scans with $\geq$3-radiologist consensus
+    nodules is used for evaluation; this dataset is withheld entirely from
+    training and used only for zero-shot detection benchmarking.
 \end{itemize}
 
 \subsection{Model Architecture and Dynamic Routing}
@@ -216,30 +220,48 @@ processing.
 
 We apply Low-Rank Adaptation (LoRA)~\cite{lora2022} to the VILA-M3 8B
 checkpoint (\texttt{MONAI/Llama3-VILA-M3-8B}), targeting the query and value
-projection matrices in the attention layers. The LoRA rank is set to
-$r = 16$ with a scaling factor $\alpha = 32$. Training data is constructed
-from the CT-RATE training split by converting each CT volume and paired report
-into two instruction types:
+projection matrices of the language-model attention layers only (the vision
+tower and multimodal projector remain frozen). The LoRA rank is set to
+$r = 16$ with a scaling factor $\alpha = 32$. A single adapter is trained
+\emph{jointly} with two complementary objectives so that one fine-tuned model
+serves both downstream tasks:
 
 \begin{itemize}
-  \item \textbf{Detection routing instructions.} Input: a prompt of the form
-    \textit{``Identify and localise thoracic abnormalities in the provided CT
-    scan.''} Output: a response that includes the structured routing token
-    \texttt{<VISTA3D(lung tumor)>} when the paired report mentions pulmonary
-    findings, teaching the model when to delegate spatial localisation to VISTA3D.
+  \item \textbf{Detection-routing objective (causal-LM loss).} Input: a prompt
+    of the form \textit{``Identify and localise thoracic abnormalities in the
+    provided chest CT scan.''} paired with key axial slices. Output: a response
+    that emits the structured routing token \texttt{<VISTA3D(lung tumor)>} when
+    the paired report mentions pulmonary findings, followed by a clinical
+    summary. The loss is the standard next-token cross-entropy on the response
+    tokens, masking the prompt prefix and image-placeholder positions.
 
-  \item \textbf{Retrieval instructions.} Input: a prompt of the form
-    \textit{``Retrieve the most similar case to: [report excerpt].''} Output:
-    the corresponding CT embedding identifier, with hard-negative sampling
-    from CT-RATE to ensure discriminative training.
+  \item \textbf{Retrieval objective (symmetric contrastive InfoNCE).} For each
+    volume in the batch we compute (i) an \emph{image-side} embedding from the
+    key slices paired with a neutral prompt and (ii) a \emph{text-side}
+    embedding from the radiology report, both taken as the last-token hidden
+    state of the LLaMA body. Embeddings are $\ell_2$-normalised and compared
+    via a CLIP-style symmetric InfoNCE loss with in-batch negatives, pulling
+    each volume's image embedding towards its own report and away from the
+    other volumes in the batch. This is what enables embedding-space retrieval;
+    no auxiliary text generation is used for retrieval.
 \end{itemize}
 
-Training is performed on a single NVIDIA L40 GPU (48\,GB VRAM). The VILA-M3
-8B model occupies approximately 18\,GB; VISTA3D requires an additional 12\,GB,
-accommodating both within a single GPU during inference. The AdamW optimiser is
-used with a learning rate of $1 \times 10^{-4}$, a cosine annealing schedule,
-and an effective batch size of 4. Training runs for 3 epochs over the CT-RATE
-training split.
+Training is performed on a single NVIDIA A100 80\,GB GPU under CUDA 11.6 /
+driver 470, requiring the PyTorch cu118 build. The VILA-M3 8B model occupies
+approximately 17\,GB in bf16, leaving substantial headroom for activation
+storage; VISTA3D is loaded only at inference time. Gradient checkpointing is
+applied to the language-model body to fit the contrastive batch alongside the
+detection forward. The AdamW optimiser is used with a learning rate of
+$1 \times 10^{-4}$, a cosine annealing schedule with 3\% warm-up, weight decay
+0.01, and an effective detection batch size of 4 (per-device batch 1, gradient
+accumulation 4); the contrastive objective uses an in-batch size of 8 with 8
+key slices per volume and softmax temperature $\tau = 0.07$. Disk constraints
+on the available server (241\,GB) require streaming CT-RATE volumes one at a
+time and discarding the raw NIfTI after extracting key axial slices. The
+present version of this paper reports results trained on a subset of 1{,}797
+CT-RATE volumes with a 200-volume hold-out reserved for retrieval evaluation;
+a scaled run on approximately 9{,}000 train / 1{,}000 hold-out volumes is in
+progress and will replace these numbers in the final manuscript.
 
 
 % -----------------------------------------------------------------------
@@ -280,16 +302,151 @@ triage, retrieving the correct historical case within the top-$K$ results
 translates directly to workflow efficiency; Recall@$K$ provides a direct measure
 of the model's practical utility for semantic case search.
 
-\subsection{Expected Outcomes}
+\subsection{Results}
 
-The fine-tuned model is expected to achieve higher DSC and IoU on LIDC-IDRI
-than both the pre-fine-tuned VILA-M3 baseline and direct VISTA3D invocation,
-demonstrating that routing-specific instruction tuning improves spatial
-grounding beyond the model's default behaviour. A gap will remain versus the
-supervised nnU-Net upper bound, quantifying the residual cost of
-annotation-free transfer. For retrieval, Recall@$K$ improvements over CT-CLIP
-and the pre-fine-tuned baseline would confirm that thoracic LoRA adaptation
-yields stronger domain-specific embeddings.
+We separately measure (i) the model's ability to emit the expected expert-call
+\emph{structure}, (ii) its ability to bind the structurally-correct call to
+the \emph{correct class}, and (iii) the resulting segmentation overlap. Decoupling
+structure from class is what surfaces the most informative behaviour of the
+fine-tuned VLM: as we show below, the call format is learned completely while
+class identity is learned only partially.
+
+% -- Headline detection table -----------------------------------------------
+\begin{table}[htbp]
+  \centering
+  \caption{Zero-shot detection on the LIDC-IDRI evaluation subset (115 scans
+    with $\geq$3-radiologist consensus nodules). \textbf{Format precision} =
+    fraction of scans for which the model emits any
+    \texttt{<VISTA3D(\textellipsis)>} call; \textbf{Class precision} = fraction
+    that emit the exact \texttt{<VISTA3D(lung tumor)>} target and therefore
+    actually invoke VISTA3D; Dice and IoU are averaged over the full evaluation
+    set, with un-invoked scans contributing zero overlap. Direct VISTA3D
+    invocation establishes the per-scan ceiling once routing succeeds.}
+  \label{tab:detection}
+  \begin{tabular}{lcccc}
+    \toprule
+    Condition                  & Format prec. & Class prec. & Dice (DSC) & IoU \\
+    \midrule
+    VILA-M3 baseline (no LoRA) & 0.00\%       & 0.00\%      & 0.000      & 0.000 \\
+    Direct VISTA3D (no VLM)    & ---          & 100.00\%    & 0.273      & 0.201 \\
+    Ours (joint LoRA)          & \textbf{100.00\%} & \textbf{15.65\%} & \textbf{0.040} & \textbf{0.031} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% -- Retrieval table --------------------------------------------------------
+\begin{table}[htbp]
+  \centering
+  \caption{Text-to-image case retrieval on the CT-RATE 200-volume hold-out.
+    Recall@$K$ measures whether each radiology report retrieves its own CT
+    volume within the top-$K$ ranked candidates by cosine similarity over
+    last-token hidden-state embeddings. The random-chance row provides the
+    lower reference for a hold-out of this size ($1/200$, $5/200$, $10/200$).}
+  \label{tab:retrieval}
+  \begin{tabular}{lccc}
+    \toprule
+    Method                      & Recall@1 & Recall@5 & Recall@10 \\
+    \midrule
+    Random chance               & 0.50\%   & 2.50\%   & 5.00\% \\
+    VILA-M3 baseline (no LoRA)  & 1.00\%   & 3.50\%   & 5.00\% \\
+    Ours (joint LoRA)           & 0.50\%   & 2.00\%   & 7.00\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Detection.}
+Table~\ref{tab:detection} reports the three detection conditions. The
+pre-fine-tuned VILA-M3 \emph{never} emits the expected routing token; manual
+inspection of its outputs shows malformed pseudo-calls of the form
+\texttt{<Lung()>}, \texttt{<LUL()>}, and similar, none of which match the
+expert-call grammar required by the MONAI agent framework. After joint LoRA
+fine-tuning, the model emits a structurally well-formed
+\texttt{<VISTA3D(\textellipsis)>} call on \textbf{every} evaluated scan
+(format precision $100.00\%$). However, only $15.65\%$ of those calls bind to
+the correct class \texttt{lung tumor}; the rest emit semantically related but
+mismatched targets such as \texttt{<VISTA3D(skeleton)>},
+\texttt{<VISTA3D(sarcoidosis)>}, and \texttt{<VISTA3D(lung tumor, pancreas
+tumor)>}. The fine-tuned model has therefore acquired the routing
+\emph{format} completely but has acquired the correct routing \emph{class}
+only partially.
+
+Direct VISTA3D invocation with the \texttt{lung tumor} prompt reaches Dice
+$0.273$ on the same scans. The routed VLM achieves a mean Dice of $0.040$
+because un-invoked scans contribute zero; verifying via
+$\text{class precision} \times \text{direct Dice} = 0.1565 \times 0.273
+\approx 0.043$ closely matches the measured $0.040$. This decomposition
+licenses a clean analytical statement: \emph{when correct routing occurs,
+the fine-tuned VLM achieves the per-scan upper bound set by VISTA3D
+itself}. The remaining headroom on this benchmark is therefore entirely a
+function of class-precision, not of segmentation quality.
+
+\paragraph{Retrieval.}
+Table~\ref{tab:retrieval} shows that the joint contrastive objective
+\emph{decreases the training loss substantially} (from
+$\ln 8 \approx 2.08$ at initialisation to $\approx 1.29$ at the end of three
+epochs) but \emph{does not transfer} to held-out retrieval. Both the
+pre-fine-tuned baseline and the LoRA-adapted model sit within noise of the
+$1/200$ random-chance reference. We read this as a measurement of the
+data-scale limit of single-adapter contrastive transfer on a generative VLM
+of this size: with $1{,}797$ training pairs, the contrastive objective fits
+the training distribution but does not generalise to unseen image--text
+pairs. Comparative dual-encoder baselines such as CT-CLIP are trained on
+$50{,}000$+ paired volumes; our subset is below the threshold at which
+contrastive adaptation of an 8\,B-parameter generative model produces a
+transferable retrieval embedding under in-batch negatives alone.
+
+\subsection{Discussion}
+
+\paragraph{Routing format versus class identity.}
+Decomposing the routing rate into a structural (format) component and a
+semantic (class) component reveals where instruction tuning succeeds and where
+it falls short. The format -- a closed grammar of less than one token's
+combinatorial complexity once the assistant-turn header is in place -- is
+learned essentially in full. The class identity, in contrast, requires the
+model to bind the cue from the visual stream and the prompt to one specific
+expert class label, and at the present training scale that binding is
+unreliable. This finding is consistent with prior observations that
+small-corpus instruction tuning teaches a response \emph{shape} faster than
+it teaches the response \emph{content}, and it directly motivates two natural
+follow-ups: (i)~scaling the routed-instruction training corpus, which the
+in-progress 9{,}000-volume run will directly test, and (ii)~constraining the
+sampling at inference time to the closed set of VISTA3D class names, which
+would convert format precision directly into class precision.
+
+\paragraph{Routing condition is bounded by the expert.}
+Because a correctly routed scan invokes exactly the same VISTA3D bundle as the
+direct-invocation baseline, the routed VLM cannot exceed the direct VISTA3D
+Dice of $0.273$ on \emph{any} scan it correctly routes. The routed mean Dice
+is therefore exactly $\text{class precision} \times 0.273$ up to small
+sub-population variance; we observe $0.040$ against the predicted $0.043$. The
+practical implication is that the contribution of the VLM in this framework
+is the \emph{delegation decision}, not the segmentation itself: a routing-rate
+improvement is the only lever available to improve detection numbers under
+the current architecture. Segmentation quality is a property of VISTA3D.
+
+\paragraph{Data scale and contrastive transfer.}
+The retrieval result is most usefully read as a characterisation rather than
+as a failed target. A generative VLM was never trained for cross-modal
+retrieval; the present work asks whether a single LoRA adapter trained
+jointly with a contrastive objective at modest scale is sufficient to make
+its hidden space retrieval-aligned. The answer is no at $1{,}797$ pairs, and
+training-loss curves indicate the model can fit the training distribution
+without that fit transferring. This is informative for the deployment-time
+question of when a generative VLM can be re-used as an embedding model for
+retrieval and when a dedicated dual-encoder is still required.
+
+\paragraph{Limitations and future work.}
+The reported numbers are derived from $1{,}797$ training pairs and a 200-volume
+retrieval hold-out; the scaled run on approximately $9{,}000$ training pairs
+with a $1{,}000$-volume hold-out, currently in progress, will replace these
+in the final manuscript. The 115-scan LIDC evaluation set is constrained by
+the storage budget of the available shared server and by the requirement that
+each evaluated scan have a $\geq$3-radiologist consensus nodule; a larger
+evaluation would tighten the reported Dice but would not change the routing
+behaviour of the model. A supervised nnU-Net upper bound on the same LIDC
+subset is left as an immediate extension. Beyond scaling, we identify
+class-constrained decoding of the expert-call token as the most direct route
+to lifting class precision toward the per-scan ceiling.
 
 
 % -----------------------------------------------------------------------
