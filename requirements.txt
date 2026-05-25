@@ -55,6 +55,8 @@ tcia_utils>=2.0.0          # LIDC-IDRI download from TCIA
 
 # --- retrieval ---
 faiss-cpu==1.8.0
+open_clip_torch>=2.24.0     # loads BiomedCLIP (hf-hub:microsoft/...) in the
+                            # hybrid-framework retrieval evaluation
 
 # --- utilities ---
 setuptools<81            # pylidc imports pkg_resources, removed in setuptools 81+
