@@ -39,11 +39,25 @@ from tqdm import tqdm
 
 
 # ── Class-constrained inference ──────────────────────────────────────────────
-# Regex capturing any structurally-valid VISTA3D routing token.
-# Matches `<VISTA3D(<class_name>)>` where <class_name> is any non-empty string
-# not containing the closing parenthesis. Used for both format-precision
-# detection and class-constrained rewriting.
-VISTA3D_ROUTING_PATTERN = re.compile(r"<VISTA3D\(([^)]+)\)>")
+# Two regexes are maintained:
+#
+#   STRICT  - matches a properly closed `<VISTA3D(X)>` token. Used to measure
+#             "true structured-format precision" and to extract the original
+#             class the model emitted (the X capture group).
+#
+#   PERMIS  - matches any opening `<VISTA3D(` followed by class-name characters,
+#             tolerating common malformations the fine-tuned model produces:
+#             missing closing `)`, missing `>`, mid-token punctuation, etc.
+#             Used for class-constrained rewriting so that malformed-but-
+#             intended-to-route outputs (e.g. `<VISTA3D(lung cancer? No).`)
+#             still get bound to the canonical `<VISTA3D(lung tumor)>` call.
+VISTA3D_STRICT_PATTERN = re.compile(r"<VISTA3D\(([^)]+)\)>")
+VISTA3D_PERMISSIVE_PATTERN = re.compile(
+    r"<VISTA3D\("           # opening marker
+    r"[^\n>]*?"             # any class-name chars, non-greedy
+    r"(?:\)>|\)|\.|\n|$)",  # tolerated terminators
+    re.MULTILINE,
+)
 
 
 def apply_class_constraint(response: str, mode: str) -> tuple[str, str | None]:
@@ -52,25 +66,26 @@ def apply_class_constraint(response: str, mode: str) -> tuple[str, str | None]:
 
     Modes:
       - "none": return the response unchanged.
-      - "lung_tumor": rewrite every `<VISTA3D(X)>` occurrence to
-        `<VISTA3D(lung tumor)>`. Equivalent to constraining decoding so that
-        any structurally-valid routing token is bound to the task-relevant
-        class. With 100%% format precision, this yields the same routing
-        decisions as a true LogitsProcessor would.
+      - "lung_tumor": rewrite every `<VISTA3D(...)>` occurrence (including
+        malformed variants) to the canonical `<VISTA3D(lung tumor)>`.
+        Equivalent to constraining decoding so that any intent-to-route
+        output is bound to the task-relevant class.
 
     Returns
     -------
     (effective_response, original_class)
         effective_response : the (possibly rewritten) response used downstream.
-        original_class     : the class string the model originally emitted
-                             (lowercased, stripped), or None if no routing
-                             token was present.
+        original_class     : the class string the model originally emitted in
+                             a strictly-formatted routing token (lowercased,
+                             stripped), or None if no strict match was found.
+                             Malformed routing attempts contribute to the
+                             effective routing rate but not to class precision.
     """
-    matches = VISTA3D_ROUTING_PATTERN.findall(response)
-    original_class = matches[0].strip().lower() if matches else None
+    strict_matches = VISTA3D_STRICT_PATTERN.findall(response)
+    original_class = strict_matches[0].strip().lower() if strict_matches else None
 
-    if mode == "lung_tumor" and matches:
-        effective = VISTA3D_ROUTING_PATTERN.sub("<VISTA3D(lung tumor)>", response)
+    if mode == "lung_tumor":
+        effective = VISTA3D_PERMISSIVE_PATTERN.sub("<VISTA3D(lung tumor)>", response)
     else:
         effective = response
 
