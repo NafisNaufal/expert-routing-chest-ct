@@ -27,6 +27,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -35,6 +36,45 @@ import numpy as np
 import torch
 import yaml
 from tqdm import tqdm
+
+
+# ── Class-constrained inference ──────────────────────────────────────────────
+# Regex capturing any structurally-valid VISTA3D routing token.
+# Matches `<VISTA3D(<class_name>)>` where <class_name> is any non-empty string
+# not containing the closing parenthesis. Used for both format-precision
+# detection and class-constrained rewriting.
+VISTA3D_ROUTING_PATTERN = re.compile(r"<VISTA3D\(([^)]+)\)>")
+
+
+def apply_class_constraint(response: str, mode: str) -> tuple[str, str | None]:
+    """
+    Apply class-constrained inference to a model response.
+
+    Modes:
+      - "none": return the response unchanged.
+      - "lung_tumor": rewrite every `<VISTA3D(X)>` occurrence to
+        `<VISTA3D(lung tumor)>`. Equivalent to constraining decoding so that
+        any structurally-valid routing token is bound to the task-relevant
+        class. With 100%% format precision, this yields the same routing
+        decisions as a true LogitsProcessor would.
+
+    Returns
+    -------
+    (effective_response, original_class)
+        effective_response : the (possibly rewritten) response used downstream.
+        original_class     : the class string the model originally emitted
+                             (lowercased, stripped), or None if no routing
+                             token was present.
+    """
+    matches = VISTA3D_ROUTING_PATTERN.findall(response)
+    original_class = matches[0].strip().lower() if matches else None
+
+    if mode == "lung_tumor" and matches:
+        effective = VISTA3D_ROUTING_PATTERN.sub("<VISTA3D(lung tumor)>", response)
+    else:
+        effective = response
+
+    return effective, original_class
 
 
 def init_process_group_if_needed() -> None:
@@ -96,10 +136,21 @@ def call_vista3d(nii_path: str, output_dir: Path, vista3d_expert) -> np.ndarray 
     return None
 
 
-def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_processor, vista3d, device):
+def run_via_vlm(record, processed_root, output_dir, model, tokenizer,
+                image_processor, vista3d, device, class_constraint: str = "none"):
     """
-    Run VILA-M3. If the model emits <VISTA3D(lung tumor)>, intercept and
-    call VISTA3D. Returns (mask_or_None, was_routed, response_text).
+    Run VILA-M3. If the model emits a routing token, intercept and call
+    VISTA3D.
+
+    Args:
+      class_constraint: "none" (require exact lung tumor class) or
+                        "lung_tumor" (any structurally-valid routing token
+                        triggers VISTA3D with lung tumor class).
+
+    Returns
+    -------
+    (mask_or_None, was_routed, raw_response, original_class)
+        original_class : class string the model originally emitted, or None.
     """
     from PIL import Image as PILImage
 
@@ -164,11 +215,15 @@ def run_via_vlm(record, processed_root, output_dir, model, tokenizer, image_proc
               f"{tokenizer.batch_decode(output_ids, skip_special_tokens=False)[0]!r}")
         print(f"[debug] input_ids len={input_ids.shape[1]}\n")
 
-    if "VISTA3D" in response and "lung tumor" in response.lower():
-        mask = call_vista3d(record.get("nii_path", ""), output_dir, vista3d)
-        return mask, True, response
+    # Apply class-constrained inference. `effective_response` is what we route
+    # against; `response` (raw) is what we save for honest qualitative reporting.
+    effective_response, original_class = apply_class_constraint(response, class_constraint)
 
-    return None, False, response
+    if "VISTA3D" in effective_response and "lung tumor" in effective_response.lower():
+        mask = call_vista3d(record.get("nii_path", ""), output_dir, vista3d)
+        return mask, True, response, original_class
+
+    return None, False, response, original_class
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -183,6 +238,15 @@ def parse_args():
     p.add_argument("--condition",
                    choices=["finetuned", "baseline", "direct_vista3d"],
                    default="finetuned")
+    p.add_argument("--class_constraint",
+                   choices=["none", "lung_tumor"],
+                   default="none",
+                   help="Class-constrained inference. 'none': require the "
+                        "model to emit <VISTA3D(lung tumor)> exactly. "
+                        "'lung_tumor': bind any structurally-valid routing "
+                        "token <VISTA3D(...)> to the lung tumor class "
+                        "(equivalent to constrained decoding under the 100%% "
+                        "format-precision regime).")
     p.add_argument("--output_json",  default=None)
     return p.parse_args()
 
@@ -230,9 +294,11 @@ def main():
         model.eval()
 
     all_dice, all_iou = [], []
-    routed_count = 0           # responses with BOTH `<VISTA3D` AND `lung tumor` (correct class)
-    format_count = 0           # responses with `<VISTA3D` regardless of class (format-only)
-    all_responses = []         # full list of VLM responses for qualitative analysis
+    routed_count = 0           # responses that triggered VISTA3D under the active constraint
+    format_count = 0           # responses with `<VISTA3D` regardless of class (format precision)
+    class_count  = 0           # responses with original class == "lung tumor" (raw class precision)
+    all_responses = []         # full list of raw VLM responses for qualitative analysis
+    all_classes   = []         # parallel list of original class strings (or None)
 
     for record in tqdm(eval_records, desc="Evaluating"):
         import tempfile
@@ -249,14 +315,19 @@ def main():
                 pred_mask = call_vista3d(record.get("nii_path", ""), tmp_path, vista3d)
                 routed = pred_mask is not None
                 all_responses.append("")
+                all_classes.append(None)
             else:
-                pred_mask, routed, response = run_via_vlm(
+                pred_mask, routed, response, original_class = run_via_vlm(
                     record, processed_root, tmp_path, model,
-                    tokenizer, image_processor, vista3d, device
+                    tokenizer, image_processor, vista3d, device,
+                    class_constraint=args.class_constraint,
                 )
                 all_responses.append(response)
+                all_classes.append(original_class)
                 if "VISTA3D" in response:
                     format_count += 1
+                if original_class == "lung tumor":
+                    class_count += 1
                 if sum(1 for r in all_responses if r) <= 5:
                     print(f"\n[response {sum(1 for r in all_responses if r)}] {response!r}\n")
 
@@ -276,31 +347,40 @@ def main():
     mean_dice = float(np.mean(all_dice)) if all_dice else 0.0
     mean_iou  = float(np.mean(all_iou))  if all_iou  else 0.0
     n = len(eval_records) if eval_records else 1
-    routing_rate = routed_count / n            # correct format AND correct class
-    format_rate  = format_count / n            # correct format, any class
+    format_prec   = format_count / n                 # any <VISTA3D(...)>
+    class_prec    = class_count  / n                 # original class == "lung tumor"
+    routing_rate  = routed_count / n                 # triggered VISTA3D under active constraint
 
     print(f"\n── Detection Results ({args.condition}) ──────────────────")
+    print(f"  Class constraint  : {args.class_constraint}")
     print(f"  Scans evaluated   : {len(eval_records)}")
-    print(f"  Format rate       : {format_rate:.2%}  ({format_count}/{n})  [any <VISTA3D(...)>]")
-    print(f"  Routing rate      : {routing_rate:.2%}  ({routed_count}/{n})  [VISTA3D + lung tumor]")
+    print(f"  Format precision  : {format_prec:.2%}  ({format_count}/{n})  [any <VISTA3D(...)>]")
+    print(f"  Class precision   : {class_prec:.2%}  ({class_count}/{n})  [raw output == 'lung tumor']")
+    print(f"  Effective routing : {routing_rate:.2%}  ({routed_count}/{n})  [VISTA3D actually invoked]")
     print(f"  Mean Dice (DSC)   : {mean_dice:.4f}")
     print(f"  Mean IoU          : {mean_iou:.4f}")
 
-    output_path = Path(args.output_json or f"results/detection_{args.condition}.json")
+    output_path = Path(
+        args.output_json
+        or f"results/detection_{args.condition}_{args.class_constraint}.json"
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         json.dump({
-            "condition":    args.condition,
-            "model":        args.model_path,
-            "lora_adapter": args.lora_adapter,
-            "n_scans":      len(eval_records),
-            "format_rate":  round(format_rate, 4),
-            "routing_rate": round(routing_rate, 4),
-            "mean_dice":    round(mean_dice, 4),
-            "mean_iou":     round(mean_iou,  4),
-            "per_scan":     [{"dice": round(d, 4), "iou": round(i, 4),
-                              "response": r}
-                             for d, i, r in zip(all_dice, all_iou, all_responses)],
+            "condition":         args.condition,
+            "class_constraint":  args.class_constraint,
+            "model":             args.model_path,
+            "lora_adapter":      args.lora_adapter,
+            "n_scans":           len(eval_records),
+            "format_precision":  round(format_prec, 4),
+            "class_precision":   round(class_prec,  4),
+            "routing_rate":      round(routing_rate, 4),
+            "mean_dice":         round(mean_dice, 4),
+            "mean_iou":          round(mean_iou,  4),
+            "per_scan":          [{"dice": round(d, 4), "iou": round(i, 4),
+                                   "response": r, "original_class": c}
+                                  for d, i, r, c in zip(all_dice, all_iou,
+                                                        all_responses, all_classes)],
         }, f, indent=2)
     print(f"\nResults saved to {output_path}")
 
