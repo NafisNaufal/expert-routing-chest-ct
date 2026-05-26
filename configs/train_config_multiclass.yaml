@@ -1,0 +1,78 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Multi-class routing configuration.
+#
+# Identical to train_config.yaml except for:
+#   - data.processed_root  → multi-class JSON + symlinked slices
+#   - train.output_dir     → separate checkpoint directory
+# so that single-class and multi-class adapters coexist for the ablation.
+#
+# Multi-class training set:
+#   ~39 k samples covering 5 routing classes (lung tumor, heart, liver,
+#   aorta, lung) plus descriptive (no-route) negative samples. Trains the
+#   model to bind the structured routing token to the specific organ /
+#   pathology named in the query.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+model:
+  name: "MONAI/Llama3-VILA-M3-8B"
+  conv_mode: "llama_3"
+  attn_implementation: "flash_attention_2"
+
+# ── LoRA ──────────────────────────────────────────────────────────────────────
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+data:
+  ctrate_root: "~/icsdg_data/ct_rate"
+  lidc_root: "~/icsdg_data/lidc_idri"
+  processed_root: "~/icsdg_data/processed_multiclass"     # ← multi-class data
+  holdout_fraction: 0.10
+  max_volumes: 9000
+  max_lidc_scans: 150
+  max_slices: 16
+  slice_size: 224
+
+# ── Training ──────────────────────────────────────────────────────────────────
+train:
+  output_dir: "./checkpoints_multiclass"                  # ← separate checkpoint
+  num_epochs: 2
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 1.0e-4
+  lr_scheduler: "cosine"
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  bf16: true
+  save_strategy: "epoch"
+  save_total_limit: 1
+  logging_steps: 50
+  dataloader_num_workers: 4
+  seed: 42
+
+# ── Contrastive retrieval objective ───────────────────────────────────────────
+# Kept for completeness even though the BiomedCLIP-based hybrid framework
+# supersedes this objective at inference time. The contrastive loss still
+# runs during training; its effect on the multi-class data is measured as
+# an ablation.
+contrastive:
+  retrieval_slices: 8
+  batch_size: 8
+  temperature: 0.07
+  loss_weight: 1.0
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+eval:
+  retrieval_k: [1, 5, 10]
+  seg_metrics: ["dice", "iou"]
+  batch_size: 8
+  index_path: "./retrieval_index_multiclass"
