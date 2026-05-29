@@ -121,25 +121,26 @@ def init_pg_if_needed() -> None:
 
 def _find_last_decoder_layer(model):
     """
-    Navigate through PeftModel / LlavaLlamaForCausalLM wrappers to find the
-    last LLaMA decoder layer, which we hook to capture hidden states.
+    Find the last transformer decoder layer by iterating named_modules().
 
-    Typical hierarchies:
-      Baseline:   LlavaLlamaForCausalLM  → .model (LlavaLlamaModel) → .layers
-      Fine-tuned: PeftModel → .base_model.model (LlavaLlamaForCausalLM)
-                           → .model (LlavaLlamaModel) → .layers
+    This is wrapper-agnostic: it works regardless of how many layers of
+    PeftModel / LlavaLlamaForCausalLM / LlavaLlamaModel wrap the base LLaMA
+    stack, because it matches on the class name ending in 'DecoderLayer'
+    (e.g. LlamaDecoderLayer, MistralDecoderLayer) rather than a fixed path.
+    The last module matching that pattern is the final decoder layer.
     """
-    m = model
-    # Unwrap PeftModel
-    if hasattr(m, "base_model") and hasattr(m.base_model, "model"):
-        m = m.base_model.model            # now LlavaLlamaForCausalLM
-    # Unwrap LlavaLlamaForCausalLM → LlavaLlamaModel
-    if hasattr(m, "model") and hasattr(m.model, "layers"):
-        return m.model.layers[-1]
-    # Fallback: bare LlavaLlamaModel
-    if hasattr(m, "layers"):
-        return m.layers[-1]
-    raise RuntimeError(f"Cannot locate decoder layers in {type(model)}")
+    last_layer = None
+    for _name, module in model.named_modules():
+        if type(module).__name__.endswith("DecoderLayer"):
+            last_layer = module
+    if last_layer is not None:
+        return last_layer
+    # Diagnostic fallback
+    all_types = sorted({type(m).__name__ for m in model.modules()})
+    raise RuntimeError(
+        f"No *DecoderLayer submodule found in {type(model).__name__}. "
+        f"Module types present: {all_types}"
+    )
 
 
 @torch.no_grad()
