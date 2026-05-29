@@ -119,10 +119,41 @@ def init_pg_if_needed() -> None:
 
 # ── Embedding extraction ──────────────────────────────────────────────────────
 
+def _find_last_decoder_layer(model):
+    """
+    Navigate through PeftModel / LlavaLlamaForCausalLM wrappers to find the
+    last LLaMA decoder layer, which we hook to capture hidden states.
+
+    Typical hierarchies:
+      Baseline:   LlavaLlamaForCausalLM  → .model (LlavaLlamaModel) → .layers
+      Fine-tuned: PeftModel → .base_model.model (LlavaLlamaForCausalLM)
+                           → .model (LlavaLlamaModel) → .layers
+    """
+    m = model
+    # Unwrap PeftModel
+    if hasattr(m, "base_model") and hasattr(m.base_model, "model"):
+        m = m.base_model.model            # now LlavaLlamaForCausalLM
+    # Unwrap LlavaLlamaForCausalLM → LlavaLlamaModel
+    if hasattr(m, "model") and hasattr(m.model, "layers"):
+        return m.model.layers[-1]
+    # Fallback: bare LlavaLlamaModel
+    if hasattr(m, "layers"):
+        return m.layers[-1]
+    raise RuntimeError(f"Cannot locate decoder layers in {type(model)}")
+
+
 @torch.no_grad()
 def extract_embedding(model, tokenizer, image_processor,
-                      query: str, images, device) -> np.ndarray:
-    """Return last-token hidden state of the LLaMA body as a 1-D numpy vector."""
+                      query: str, images, device,
+                      last_layer) -> np.ndarray:
+    """
+    Return last-token hidden state of the last decoder layer as a unit vector.
+
+    We use model.generate() (identical call to eval_routing_multiclass.py) with
+    a forward hook on the last decoder layer to intercept hidden states.
+    Calling model() directly fails for LLaVA because image-token injection is
+    only triggered inside generate()/prepare_inputs_for_generation().
+    """
     from llava.mm_utils import tokenizer_image_token, process_images      # type: ignore
     from llava.conversation import conv_templates, SeparatorStyle          # type: ignore
     from llava.constants import IMAGE_TOKEN_INDEX                          # type: ignore
@@ -142,16 +173,37 @@ def extract_embedding(model, tokenizer, image_processor,
     imgs_tensor = process_images(images, image_processor, model.config).to(
         device=device, dtype=next(model.parameters()).dtype)
 
-    # forward with output_hidden_states; grab last hidden state of last token
-    out = model(
-        input_ids,
-        images=[imgs_tensor],
-        output_hidden_states=True,
-        use_cache=False,
-    )
-    last_hidden = out.hidden_states[-1]   # (1, seq_len, hidden_dim)
-    vec = last_hidden[0, -1, :].float().cpu().numpy()
-    vec /= np.linalg.norm(vec) + 1e-8    # L2-normalise
+    # ── forward hook captures last decoder layer output ───────────────────
+    captured: dict = {}
+
+    def _hook(module, inp, out):
+        # LLaMA decoder layer returns (hidden_states, ...) tuple
+        h = out[0] if isinstance(out, tuple) else out
+        captured["h"] = h.detach()          # (1, seq_len, hidden_dim)
+
+    handle = last_layer.register_forward_hook(_hook)
+    try:
+        model.generate(
+            input_ids,
+            images=[imgs_tensor],
+            max_new_tokens=1,
+            min_new_tokens=1,
+            do_sample=False,
+            use_cache=True,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    finally:
+        handle.remove()
+
+    if "h" not in captured:
+        return np.zeros(4096, dtype=np.float32)
+
+    # Take last token of the prefill pass (the hook fires once per generate call
+    # for the full input sequence; subsequent tokens are 1-token KV-cache steps).
+    vec = captured["h"][0, -1, :].float().cpu().numpy()
+    norm = np.linalg.norm(vec)
+    if norm > 1e-8:
+        vec /= norm
     return vec
 
 
@@ -184,6 +236,10 @@ def collect_embeddings(records, cfg, args, use_lora: bool) -> np.ndarray:
         model = PeftModel.from_pretrained(model, adapter)
     model.eval()
 
+    # Locate last decoder layer once — reused for every forward pass
+    last_layer = _find_last_decoder_layer(model)
+    print(f"  Hooking layer: {type(last_layer).__name__}")
+
     all_vecs = []
     for record in tqdm(records, desc=f"Embedding ({tag})"):
         rels = record["images"]
@@ -196,17 +252,17 @@ def collect_embeddings(records, cfg, args, use_lora: bool) -> np.ndarray:
         ]
         if not images:
             # pad with zeros so indices stay aligned
-            all_vecs.extend([np.zeros(4096)] * len(CLASS_ORDER))
+            all_vecs.extend([np.zeros(4096, dtype=np.float32)] * len(CLASS_ORDER))
             continue
 
         for cls in CLASS_ORDER:
             try:
                 vec = extract_embedding(
                     model, tokenizer, image_processor,
-                    QUERY_PER_CLASS[cls], images, device)
+                    QUERY_PER_CLASS[cls], images, device, last_layer)
             except Exception as e:
                 print(f"  error ({record['volume_id']}/{cls}): {e}")
-                vec = np.zeros(4096)
+                vec = np.zeros(4096, dtype=np.float32)
             all_vecs.append(vec)
 
     # free GPU memory before next model load
