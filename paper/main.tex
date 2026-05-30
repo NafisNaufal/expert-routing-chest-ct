@@ -666,17 +666,14 @@ lifting mean Dice from near zero to $0.273$ in the multi-class setting and
 matching the single-class constrained result exactly. Together these results
 establish that a single lightweight LoRA adapter can serve as a universal
 routing layer for a 127-class segmentation expert, with per-task deployment
-controlled entirely at inference time. The introduced \emph{format-vs-class
-precision} decomposition is a general analytical tool applicable to any
-structured-output VLM that delegates to a closed-vocabulary expert --- it
-cleanly separates routing grammar acquisition from semantic class binding,
-enabling arithmetic prediction of downstream task performance from routing
-statistics alone. Future work will quantify per-class routing precision
-across all five VISTA3D targets via class-specific ground-truth benchmarks,
-investigate balanced multi-class sampling strategies to improve zero-constraint
-macro class precision beyond $20\%$, and explore expert substitution with
-nodule-specialised models to raise the detection ceiling beyond the current
-$\mathrm{Dice}=0.273$ proxy-expert bound.
+controlled entirely at inference time. The \emph{format-vs-class precision} decomposition introduced here is a
+general analytical tool for any structured-output VLM that delegates to a
+closed-vocabulary expert, enabling arithmetic prediction of downstream task
+performance from routing statistics alone. Future work will quantify
+per-class routing precision via class-specific benchmarks, investigate
+balanced sampling to improve zero-constraint macro class precision beyond
+$20\%$, and explore nodule-specialised expert substitution to raise the
+detection ceiling above $\mathrm{Dice}=0.273$.
 
 
 % -----------------------------------------------------------------------
@@ -795,7 +792,6 @@ Llama 2: Open foundation and fine-tuned chat models
 Hu E J, Shen Y, Wallis P, Allen-Zhu Z, Li Y, Wang S, Wang L and Chen W 2022
 LoRA: Low-rank adaptation of large language models
 \textit{Proc. 10th Int. Conf. on Learning Representations (ICLR)}
-openreview.net/forum?id=nZeVKeeFYf9
 
 \bibitem{ctrate2024}
 Hamamci I E, Er B, Alber G, Simsek O, Simsar E, Senol E, Nalci M A,
@@ -844,22 +840,15 @@ segmentation
 \textit{Proc. 4th Int. Conf. on 3D Vision (3DV)} 565--571
 
 \bibitem{luna16}
-Setio A A A, Traverso A, de Bel T, Berens M S N, van den Bogaard C,
-Cerello P, Chen H, Dou Q, Fantacci M E, Geurts B, van der Gugten R,
-Heng P A, Jansen B, de Kaste M M J, Kotov V, Lin J Y-H, Manders J T M C,
-S\'{o}\~{n}ora-Mengana A, Garc\'{i}a-Naranjo J C, Papavasileiou E,
-Prokop M, Saletta M, Schaefer-Prokop C M, Scholten E T, Scholten L,
-Snoeren M M, Torres E L, Vandemeulebroucke J, Walasek N,
-Zuidhof G C A, van Ginneken B and Jacobs C 2017
+Setio A A A, Traverso A, de Bel T, Berens M S N, van den Bogaard C
+et al.\ 2017
 Validation, comparison, and combination of algorithms for automatic detection
-of pulmonary nodules in computed tomography images: the LUNA16 challenge
+of pulmonary nodules in CT images: the LUNA16 challenge
 \textit{Med. Image Anal.} \textbf{42} 1--13
 
 \bibitem{biomedclip2023}
-Zhang S, Xu Y, Usuyama N, Xu H, Bagga J K, Tinn R, Preston S, Rao R,
-Wei M, Valluri N, Wong C, Tupini A, Wang Y, Mazzola M, Shukla S, Liden L,
-Gao J, Crabtree A, Piening B, Bifulco C, Lungren M P, Naumann T,
-Wang S and Poon H 2023
+Zhang S, Xu Y, Usuyama N, Xu H, Bagga J K, Tinn R, Preston S,
+Rao R et al.\ 2023
 BiomedCLIP: a multimodal biomedical foundation model pretrained from
 fifteen million scientific image-text pairs
 \textit{arXiv preprint} arXiv:2303.00915
