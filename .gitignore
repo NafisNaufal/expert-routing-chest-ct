@@ -50,8 +50,9 @@ results/
 .ipynb_checkpoints/
 *.ipynb
 
-# ── LaTeX build artifacts ─────────────────────────────────────────────────────
+# ── Paper directory (only the final compiled PDF is tracked) ─────────────────
 paper/*
+!paper/main paper.pdf
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
@@ -62,9 +63,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
-
-# ── External code (cloned separately on the server — see README Setup) ───────
-VLM-Radiology-Agent-Framework/
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 .env

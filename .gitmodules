@@ -1,0 +1,3 @@
+[submodule "VLM-Radiology-Agent-Framework"]
+	path = VLM-Radiology-Agent-Framework
+	url = https://github.com/Project-MONAI/VLM-Radiology-Agent-Framework

@@ -8,6 +8,8 @@
 
 **Authors:** Dionisius Seraf Saputra, Nafis Naufal Rahman
 
+📄 **[Final paper (PDF)](paper/main%20paper.pdf)**
+
 ---
 
 ## Overview
@@ -34,21 +36,17 @@ without requiring bounding box annotations.
 - Python 3.10
 - 1× NVIDIA A100 80 GB
 - NVIDIA driver 470.x / CUDA 11.6 host → **PyTorch cu118 build** (cu12x needs driver ≥ 525)
-- ~241 GB disk is enough — the data pipeline streams CT-RATE volumes one at a
-  time and deletes the raw volume after slicing (the full set is ~21 TB).
+- ~241 GB disk — the data pipeline streams CT-RATE volumes one at a time and
+  deletes the raw volume after slicing (the full set is ~21 TB).
 
 ---
 
 ## Setup
 
 ```bash
-# Clone the repo
-git clone <your-repo-url>
+# Clone the repo with submodules (includes VLM-Radiology-Agent-Framework + VILA)
+git clone --recursive <your-repo-url>
 cd icsdg
-
-# Get the VILA-M3 framework + its VILA submodule (inside the repo)
-git clone https://github.com/Project-MONAI/VLM-Radiology-Agent-Framework \
-    --recursive ./VLM-Radiology-Agent-Framework
 
 # Create the conda env, install the pinned cu118 stack, patch transformers
 bash setup.sh
@@ -58,6 +56,8 @@ conda activate icsdg
 export ICSDG_DATA_ROOT=$HOME/icsdg_data
 export HF_HOME=$ICSDG_DATA_ROOT/hf_cache
 ```
+
+> **Note:** If you forgot `--recursive`, run `git submodule update --init --recursive` inside the repo.
 
 ---
 
@@ -158,8 +158,7 @@ All hyperparameters live in `configs/train_config.yaml`:
 ```
 icsdg/
 ├── paper/
-│   ├── main.tex               ← LaTeX paper (IOP template)
-│   └── figures/               ← place architecture diagram here
+│   └── main paper.pdf         ← final compiled paper
 ├── configs/
 │   └── train_config.yaml
 ├── src/
@@ -173,6 +172,7 @@ icsdg/
 │   └── eval/
 │       ├── eval_retrieval.py
 │       └── eval_detection.py
+├── VLM-Radiology-Agent-Framework/  ← git submodule (MONAI/NVIDIA)
 ├── requirements.txt
 └── setup.sh
 ```
