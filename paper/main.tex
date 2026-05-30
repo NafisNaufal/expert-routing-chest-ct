@@ -138,26 +138,32 @@ been adapted to the medical domain by methods such as MedCLIP~\cite{medclip2022}
 and BioViL-T~\cite{biovilt2023}. These approaches learn representations from
 unpaired or temporally paired radiology report-image corpora and achieve
 competitive zero-shot classification performance on chest X-ray benchmarks.
-More recent large multimodal models such as GPT-4V~\cite{gpt4_2023} and
-Med-Gemini~\cite{medgemini2024} extend report-grounded reasoning to open-ended
-clinical question answering. However, these models remain constrained to 2D
-input modalities and lack mechanisms for volumetric spatial grounding.
+More recent large multimodal models including Flamingo~\cite{flamingo2022},
+GPT-4V~\cite{gpt4_2023}, and Med-Gemini~\cite{medgemini2024} extend
+report-grounded reasoning to open-ended clinical question answering.
+However, these models remain constrained to 2D input modalities and lack
+mechanisms for volumetric spatial grounding.
 
 \subsection{3D Medical Image Analysis}
 
 Volumetric CT analysis has been dominated by convolutional architectures.
 nnU-Net~\cite{nnunet2021} established a robust self-configuring baseline for 3D
 segmentation across diverse clinical tasks. For pulmonary nodule detection
-specifically, 3D Faster R-CNN-based systems and sliding-window CNNs have set
-strong supervised benchmarks on LIDC-IDRI~\cite{lidc2011}. VISTA3D~\cite{vista3d2024}
-extends this paradigm with a promptable 3D segmentation model that accepts text
-and point prompts, making it well-suited as a spatially-precise expert in a
-VLM routing architecture.
+specifically, 3D Faster R-CNN-based systems and sliding-window CNNs have been
+benchmarked through community challenges such as LUNA16~\cite{luna16}, setting
+strong supervised baselines on LIDC-IDRI~\cite{lidc2011}.
+TotalSegmentator~\cite{totalsegmentor2023} demonstrates the breadth of
+modern CT anatomy segmentation, covering 104 structures across the thorax,
+abdomen, and pelvis. VISTA3D~\cite{vista3d2024} extends this paradigm with a
+promptable 3D segmentation model that accepts text and point prompts, making
+it well-suited as a spatially-precise expert in a VLM routing architecture.
 
 \subsection{Expert-Routed and Agent-Based Medical VLMs}
 
-VILA-M3~\cite{vilaM32024} builds on the VILA visual language architecture~\cite{vila2024}
-and the LLaMA language backbone~\cite{llama2023} to introduce expert routing:
+VILA-M3~\cite{vilaM32024} builds on the VILA visual language
+architecture~\cite{vila2024}, itself grounded in the LLaVA visual instruction
+tuning paradigm~\cite{llava2023} and the transformer-based LLaMA
+backbone~\cite{llama2023,transformer2017}, to introduce expert routing:
 the VLM's language head generates structured routing signals that invoke
 specialist models for tasks requiring high-resolution spatial reasoning. The
 MONAI VLM Agent Framework~\cite{monai2022} provides the infrastructure for
@@ -314,13 +320,17 @@ processing.
 
 \subsection{Instruction Fine-Tuning Strategy}
 
-We apply Low-Rank Adaptation (LoRA)~\cite{lora2022} to the VILA-M3 8B
-checkpoint (\texttt{MONAI/Llama3-VILA-M3-8B}), targeting the query and value
-projection matrices of the language-model attention layers only (the vision
-tower and multimodal projector remain frozen). The LoRA rank is set to
-$r = 16$ with a scaling factor $\alpha = 32$. A single adapter is trained
-\emph{jointly} with two complementary objectives so that one fine-tuned model
-serves both downstream tasks:
+We apply Low-Rank Adaptation (LoRA)~\cite{lora2022}, a parameter-efficient
+fine-tuning strategy that builds on the adapter framework of
+Houlsby et al.~\cite{houlsby2019} while reducing parameter overhead through
+low-rank matrix decomposition, to the VILA-M3 8B checkpoint
+(\texttt{MONAI/Llama3-VILA-M3-8B}). The query and value projection matrices
+of the language-model attention layers are targeted (the vision tower and
+multimodal projector remain frozen). The LoRA rank is set to $r = 16$ with a
+scaling factor $\alpha = 32$. Instruction data is constructed following the
+supervised fine-tuning protocol of Ouyang et al.~\cite{ouyang2022}. A single
+adapter is trained \emph{jointly} with two complementary objectives so that
+one fine-tuned model serves both downstream tasks:
 
 \begin{itemize}
   \item \textbf{Detection-routing objective (causal-LM loss).} Two training
@@ -340,7 +350,7 @@ serves both downstream tasks:
     on the response tokens, masking the prompt prefix and image-placeholder
     positions.
 
-  \item \textbf{Retrieval objective (symmetric contrastive InfoNCE).} For each
+  \item \textbf{Retrieval objective (symmetric contrastive InfoNCE~\cite{oord2018}).} For each
     volume in the batch we compute (i) an \emph{image-side} embedding from the
     key slices paired with a neutral prompt and (ii) a \emph{text-side}
     embedding from the radiology report, both taken as the last-token hidden
@@ -446,7 +456,7 @@ The adapted framework is compared against two reference conditions:
 Detection is performed via voxel-level segmentation: VISTA3D produces a
 binary mask for the \texttt{lung tumor} class, which is evaluated against
 the four-radiologist consensus contours from LIDC-IDRI. Performance is
-measured using Dice Similarity Coefficient (DSC) as the primary metric and
+measured using Dice Similarity Coefficient (DSC)~\cite{milletari2016} as the primary metric and
 Intersection over Union (IoU) as the secondary metric. These overlap-based
 metrics are the standard for segmentation-based detection in medical imaging
 and directly reflect the spatial precision of nodule localisation.
@@ -748,9 +758,10 @@ sit within noise of the $1/1000$ random-chance reference on the held-out
 split, establishing that $9{,}000$ training pairs remains below the
 generalisation threshold for single-adapter contrastive transfer on an
 8\,B-parameter generative model under in-batch negatives alone.
-Domain-matched dual-encoder models such as CT-CLIP reach competitive
-retrieval performance at $50{,}000$+ paired volumes, providing a concrete
-scale reference for future system design.
+Domain-matched dual-encoder models such as BiomedCLIP~\cite{biomedclip2023}
+and CT-CLIP~\cite{ctrate2024} reach competitive retrieval performance at
+$50{,}000$+ paired volumes, providing a concrete scale reference for future
+system design.
 
 \subsection{Discussion}\label{sec:discussion}
 
@@ -859,7 +870,7 @@ because no multi-class 3D CT segmentation model with a nodule-specific class
 is currently available; the resulting overlap therefore characterises the
 match between VISTA3D's lung-mass prior and LIDC nodule contours, not the
 upper bound of nodule segmentation in general. Substituting a
-nodule-specialised expert (e.g., a LUNA16-trained 3D detector or a future
+nodule-specialised expert (e.g., a LUNA16-trained~\cite{luna16} 3D detector or a future
 nodule-aware MONAI bundle) would lift this ceiling without altering the
 routing methodology, since the VLM's contribution is the delegation
 decision rather than the segmentation itself.
@@ -1012,6 +1023,81 @@ Van Beeke E J R, Yankelevitz D and Petrick N 2011
 The Lung Image Database Consortium (LIDC) and Image Database Resource
 Initiative (IDRI): a completed reference database of lung nodules on CT scans
 \textit{Med. Phys.} \textbf{38} 915--931
+
+\bibitem{transformer2017}
+Vaswani A, Shazeer N, Parmar N, Uszkoreit J, Jones L, Gomez A N,
+Kaiser {\L} and Polosukhin I 2017
+Attention is all you need
+\textit{Proc. 31st Conf. on Neural Information Processing Systems (NeurIPS)}
+5998--6008
+
+\bibitem{llava2023}
+Liu H, Li C, Wu Q and Lee Y J 2023
+Visual instruction tuning
+\textit{Proc. 37th Conf. on Neural Information Processing Systems (NeurIPS)}
+arXiv:2304.08485
+
+\bibitem{flamingo2022}
+Alayrac J-B, Donahue J, Luc P, Miech A, Barr I, Hasson Y, Lenc K,
+Mensch A, Millican K, Reynolds M, Ring R, Rutherford E, Cabi S, Han T,
+Gong Z, Samangooei S, Monteiro M, Menick J L, Borgeaud S, Brock A,
+Nematzadeh A, Sharifzadeh S, Bi\'{n}kowski M, Barreira R, Vinyals O,
+Zisserman A and Simonyan K 2022
+Flamingo: a visual language model for few-shot learning
+\textit{Proc. 36th Conf. on Neural Information Processing Systems (NeurIPS)}
+arXiv:2204.14198
+
+\bibitem{oord2018}
+van den Oord A, Li Y and Vinyals O 2018
+Representation learning with contrastive predictive coding
+\textit{arXiv preprint} arXiv:1807.03748
+
+\bibitem{ouyang2022}
+Ouyang L, Wu J, Jiang X, Almeida D, Wainwright C L, Mishkin P, Zhang C,
+Agarwal S, Slama K, Ray A, Schulman J, Hilton J, Kelton F, Miller L,
+Simens M, Askell A, Welinder P, Christiano P, Leike J and Lowe R 2022
+Training language models to follow instructions with human feedback
+\textit{Proc. 36th Conf. on Neural Information Processing Systems (NeurIPS)}
+arXiv:2203.02155
+
+\bibitem{houlsby2019}
+Houlsby N, Giurgiu A, Jastrzebski S, Morrone B, de Laroussilhe Q,
+Gesmundo A, Attariyan M and Gelly S 2019
+Parameter-efficient transfer learning for NLP
+\textit{Proc. 36th Int. Conf. on Machine Learning (ICML)} 2790--2799
+
+\bibitem{milletari2016}
+Milletari F, Navab N and Ahmadi S-A 2016
+V-Net: fully convolutional neural networks for volumetric medical image
+segmentation
+\textit{Proc. 4th Int. Conf. on 3D Vision (3DV)} 565--571
+
+\bibitem{luna16}
+Setio A A A, Traverso A, de Bel T, Berens M S N, van den Bogaard C,
+Cerello P, Chen H, Dou Q, Fantacci M E, Geurts B, van der Gugten R,
+Heng P A, Jansen B, de Kaste M M J, Kotov V, Lin J Y-H, Manders J T M C,
+S\'{o}\~{n}ora-Mengana A, Garc\'{i}a-Naranjo J C, Papavasileiou E,
+Prokop M, Saletta M, Schaefer-Prokop C M, Scholten E T, Scholten L,
+Snoeren M M, Torres E L, Vandemeulebroucke J, Walasek N,
+Zuidhof G C A, van Ginneken B and Jacobs C 2017
+Validation, comparison, and combination of algorithms for automatic detection
+of pulmonary nodules in computed tomography images: the LUNA16 challenge
+\textit{Med. Image Anal.} \textbf{42} 1--13
+
+\bibitem{totalsegmentor2023}
+Wasserthal J, Breit H-C, Meyer M T, Pradella M, Hinck D, Sauter A W,
+Heye T, Boll D T, Cyriac J, Yang S, Bach M and Segeroth M 2023
+TotalSegmentator: robust segmentation of 104 anatomic structures in CT images
+\textit{Radiology: Artificial Intelligence} \textbf{5}(5) e230024
+
+\bibitem{biomedclip2023}
+Zhang S, Xu Y, Usuyama N, Xu H, Bagga J K, Tinn R, Preston S, Rao R,
+Wei M, Valluri N, Wong C, Tupini A, Wang Y, Mazzola M, Shukla S, Liden L,
+Gao J, Crabtree A, Piening B, Bifulco C, Lungren M P, Naumann T,
+Wang S and Poon H 2023
+BiomedCLIP: a multimodal biomedical foundation model pretrained from
+fifteen million scientific image-text pairs
+\textit{arXiv preprint} arXiv:2303.00915
 
 \end{thebibliography}
 
