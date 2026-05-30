@@ -31,32 +31,22 @@ Vision--Language Models}
 \email{nafisnaufal1426@student.ub.ac.id, dionisiusve32@student.ub.ac.id}
 
 \begin{abstract}
-Manual annotation of 3D Chest Computed Tomography (CT) is labour-intensive,
-limiting the scalability of deep-learning systems for thoracic diagnosis.
-Vision--Language Models (VLMs) offer an alternative that learns from natively
-paired image--report data, but native application to volumetric CT is
-constrained by token-budget overflow and by the spatial coarseness of VLM
-patch embeddings relative to small thoracic structures. This paper presents
-a parameter-efficient adaptation framework that fine-tunes VILA-M3, an
-expert-routed medical VLM developed under the MONAI project, on the
-large-scale CT-RATE dataset via Low-Rank Adaptation (LoRA). A built-in
-dynamic routing mechanism delegates volumetric localisation to VISTA3D, a
-specialist 3D segmentation expert, while the VLM retains semantic control.
-Two methodological contributions are introduced: (i)~\emph{multi-class
-expert routing} -- a single adapter trained to emit query-conditioned
-routing tokens across five distinct VISTA3D classes (lung tumor, heart,
-liver, aorta, lung), demonstrating that VLM expert delegation generalises
-beyond a single pathology; and (ii)~\emph{class-constrained inference} -- a
-lightweight inference-time constraint that binds any structurally-valid
-routing token to a task-relevant class, closing the gap between routing
-format precision and class precision. We additionally introduce a
-\emph{format-vs-class precision} decomposition that cleanly separates the
-structural and semantic components of routing performance. On zero-shot
-pulmonary lesion localisation in LIDC-IDRI, the combined framework lifts
-mean Dice from $0.000$ (pre-fine-tuning baseline) to $0.273$, exactly
-matching the per-scan expert-segmentation ceiling. The framework is
-expert-agnostic; substituting a nodule-specialised expert leaves the routing
-methodology unchanged.
+Manual annotation of 3D chest CT is labour-intensive, limiting the
+scalability of deep-learning diagnostic systems. We present a
+parameter-efficient framework that fine-tunes VILA-M3 on CT-RATE via LoRA
+and routes volumetric localisation queries to VISTA3D. Two contributions are
+introduced: (i)~\emph{multi-class expert routing} --- a single adapter
+trained on 39{,}000 class-conditioned samples to emit query-specific routing
+tokens across five VISTA3D classes (lung tumor, heart, liver, aorta, lung);
+and (ii)~\emph{class-constrained inference} --- a lightweight inference-time
+rewrite that closes the gap between routing format precision ($100\%$) and
+class precision without retraining. A \emph{format-vs-class precision}
+decomposition separates structural and semantic routing components, enabling
+arithmetic verification of the segmentation gap. On zero-shot pulmonary
+lesion localisation in LIDC-IDRI, the framework lifts mean Dice from $0.000$
+to $0.273$, matching the per-scan expert ceiling. The liver routing class
+achieves $100\%$ class precision without constraint, establishing proof of
+concept for query-conditioned multi-class expert delegation.
 \end{abstract}
 
 
@@ -101,34 +91,19 @@ transfer is then evaluated on LIDC-IDRI~\cite{lidc2011}, an entirely unseen
 benchmark of expert-annotated pulmonary nodules, alongside a case retrieval
 evaluation on the CT-RATE hold-out split.
 
-\subsection*{Key Contributions}
-
-\begin{enumerate}
-  \item \textbf{Multi-Class Expert Routing.} A single LoRA adapter trained on
-    39{,}000 class-conditioned instruction samples that teaches VILA-M3 to
-    emit query-specific routing tokens across five VISTA3D classes (\texttt{lung
-    tumor}, \texttt{heart}, \texttt{liver}, \texttt{aorta}, \texttt{lung}),
-    demonstrating that VLM expert delegation generalises beyond a single
-    pathology. The same adapter can be directed at any supported class at
-    inference time without retraining.
-
-  \item \textbf{Class-Constrained Inference.} A lightweight inference-time
-    mechanism that binds any structurally-valid routing token to a
-    task-relevant class, converting saturated format precision ($100\%$) into
-    effective class precision ($100\%$) without modifying model weights. We
-    introduce a \emph{format-vs-class precision} decomposition that cleanly
-    separates the structural and semantic components of routing performance and
-    allows arithmetic verification of the Dice gap.
-
-  \item \textbf{First Zero-Shot VLM-Routed Lung Lesion Localisation on
-    LIDC-IDRI.} Routing to VISTA3D's \texttt{lung tumor} class via the
-    fine-tuned adapter --- combined with class-constrained decoding ---
-    achieves mean Dice $0.273$ on 115 expert-annotated LIDC-IDRI scans without
-    any pixel-level training supervision, establishing the first VLM-based
-    zero-shot localisation evaluation on this benchmark. The framework is
-    expert-agnostic: substituting a nodule-specialised expert leaves the
-    routing methodology unchanged.
-\end{enumerate}
+\textbf{Contributions.}
+(1)~\textbf{Multi-class expert routing}: a single LoRA adapter trained on
+39{,}000 class-conditioned samples that emits query-specific routing tokens
+across five VISTA3D classes (\texttt{lung tumor}, \texttt{heart},
+\texttt{liver}, \texttt{aorta}, \texttt{lung}), generalisable to any
+supported class at inference time without retraining.
+(2)~\textbf{Class-constrained inference}: a lightweight mechanism that
+converts saturated format precision ($100\%$) into effective class precision
+($100\%$) without modifying model weights, accompanied by a
+\emph{format-vs-class precision} decomposition for analytical verification.
+(3)~\textbf{First zero-shot VLM-routed lung lesion localisation on
+LIDC-IDRI}: mean Dice $0.273$ on 115 expert-annotated scans without any
+pixel-level supervision. The framework is expert-agnostic.
 
 
 % -----------------------------------------------------------------------
@@ -283,11 +258,9 @@ provides an overview of the system.
         {Routing vocabulary:\quad\texttt{lung\,tumor}\;$\cdot$\;\texttt{heart}
          \;$\cdot$\;\texttt{liver}\;$\cdot$\;\texttt{aorta}\;$\cdot$\;\texttt{lung}};
   \end{tikzpicture}
-  \caption{Framework overview. CT slices and a task-specific clinical query
-    are fused by VILA-M3 (LoRA-adapted on CT-RATE), which emits a structured
-    routing token. A class-constrained inference step rewrites the token to
-    the task-relevant VISTA3D class before dispatch, closing the gap between
-    format precision (100\%) and raw class precision.}
+  \caption{Framework overview. VILA-M3 (LoRA-adapted) emits a routing token;
+    class-constrained inference rewrites it to the task-relevant VISTA3D class,
+    closing the format--class precision gap.}
   \label{fig:architecture}
 \end{figure}
 
@@ -413,26 +386,18 @@ construction pipeline.
     \node[lbl, right=0.15cm of samp, yshift=-1.20cm, align=left]
         {\textbf{39\,430}\\total samples\\5 classes\\ + negatives};
   \end{tikzpicture}
-  \caption{Multi-class training data construction. Each CT-RATE volume
-    contributes up to six instruction samples: one per applicable routing
-    class (conditioned on report vocabulary) plus one descriptive negative
-    sample that requires no routing call. A single LoRA adapter is then
-    trained on all 39\,430 samples jointly.}
+  \caption{Multi-class data construction. Each volume yields up to six
+    instruction samples (one per applicable class + one negative); 39{,}430
+    samples total are used to train a single LoRA adapter jointly.}
   \label{fig:training_pipeline}
 \end{figure}
 
-Training is performed on a single NVIDIA A100 80\,GB GPU under CUDA 11.6 /
-driver 470, requiring the PyTorch cu118 build. The VILA-M3 8B model occupies
-approximately 17\,GB in bf16, leaving substantial headroom for activation
-storage; VISTA3D is loaded only at inference time. Gradient checkpointing is
-applied to the language-model body to fit the contrastive batch alongside the
-detection forward. The AdamW optimiser is used with a learning rate of
-$1 \times 10^{-4}$, a cosine annealing schedule with 3\% warm-up, weight decay
-0.01, and an effective detection batch size of 4 (per-device batch 1, gradient
-accumulation 4); the contrastive objective uses an in-batch size of 8 with 8
-key slices per volume and softmax temperature $\tau = 0.07$. Disk constraints
-on the available server (241\,GB) require streaming CT-RATE volumes one at a
-time and discarding the raw NIfTI after extracting key axial slices.
+Training uses a single NVIDIA A100 80\,GB GPU (HPC AI-Center, Universitas
+Brawijaya) via the PyTorch cu118 stack. The AdamW optimiser runs at
+$1 \times 10^{-4}$ with cosine annealing (3\% warm-up), weight decay 0.01,
+effective detection batch size 4 (gradient accumulation), and contrastive
+in-batch size 8 at temperature $\tau = 0.07$. CT-RATE volumes are streamed
+and discarded after slice extraction to stay within server storage limits.
 
 
 % -----------------------------------------------------------------------
@@ -588,11 +553,10 @@ The resulting unconstrained Dice ($0.001$) on LIDC reflects near-zero
     \legend{Format Precision, Class Precision}
   \end{axis}
   \end{tikzpicture}
-  \caption{Per-class routing precision of the multi-class adapter on 200
-    CT-RATE hold-out volumes (1{,}000 total queries). \texttt{liver} achieves
-    full binding without constraint; \texttt{lung\,tumor} and \texttt{heart}
-    show high format but zero class precision (class confusion); \texttt{aorta}
-    and \texttt{lung} show no routing activation at this training scale.}
+  \caption{Per-class routing precision (200 hold-out volumes, 1{,}000 queries).
+    \texttt{liver}: full binding ($100\%/100\%$); \texttt{lung tumor}/\texttt{heart}:
+    high format, zero class (class confusion); \texttt{aorta}/\texttt{lung}:
+    no routing activation at this training scale.}
   \label{fig:perclass_routing}
 \end{figure}
 
@@ -611,101 +575,93 @@ $>0\%$ format precision benefits from the constraint, which is why the
 the ideal case that class-constrained inference replicates for all other
 classes at inference time.
 
-% ── Figure: Routing Precision Decomposition ─────────────────────────────────
+% ── Figure: Routing Precision + Dice (side-by-side) ─────────────────────────
 \begin{figure}[tp]
   \centering
-  \begin{tikzpicture}
-  \begin{axis}[
-    ybar,
-    bar width     = 6pt,
-    enlarge x limits = 0.18,
-    width  = \columnwidth,
-    height = 4.6cm,
-    legend style  = {at={(0.5,-0.30)}, anchor=north, legend columns=-1,
-                     font=\footnotesize\sffamily},
-    ylabel        = {Precision (\%)},
-    ylabel style  = {font=\footnotesize\sffamily},
-    symbolic x coords = {Baseline, {SC-LoRA}, {SC+Cstr},
-                         {MC-LoRA}, {MC+Cstr}},
-    xtick         = data,
-    xticklabel style = {font=\scriptsize\sffamily, rotate=30, anchor=east},
-    ymin=0, ymax=120,
-    ytick         = {0,20,40,60,80,100},
-    ymajorgrids   = true,
-    grid style    = {dashed, gray!30},
-    tick label style = {font=\scriptsize\sffamily},
-    every axis plot/.append style={line width=0.4pt},
-  ]
-    \addplot[fill=clrblue!55, draw=clrblue!80!black]
-      coordinates {(Baseline,0) ({SC-LoRA},100) ({SC+Cstr},100)
-                   ({MC-LoRA},100) ({MC+Cstr},100)};
-    \addplot[fill=clrorange!60, draw=clrorange!80!black]
-      coordinates {(Baseline,0) ({SC-LoRA},59.13) ({SC+Cstr},100)
-                   ({MC-LoRA},0.87) ({MC+Cstr},100)};
-    \legend{Format Precision, Class / Eff.\ Precision}
-    %% ceiling line
-    \draw[dashed, clrteal, semithick]
-      ({rel axis cs:0,1}) -- ({rel axis cs:1,1})
-      node[right, font=\scriptsize\sffamily, text=clrteal] {100\%};
-  \end{axis}
-  \end{tikzpicture}
-  \caption{Routing precision decomposition across all five detection
-    conditions. \textbf{Blue}: format precision (any \texttt{<VISTA3D(\ldots)>}
-    token emitted). \textbf{Orange}: raw class precision or effective precision
-    after class-constrained inference (marked \textbf{+Cstr}). SC = single-class
-    adapter; MC = multi-class adapter.}
+  \begin{minipage}[t]{0.49\columnwidth}
+    \centering
+    \begin{tikzpicture}
+    \begin{axis}[
+      ybar,
+      bar width     = 5pt,
+      enlarge x limits = 0.20,
+      width  = \linewidth,
+      height = 5.0cm,
+      legend style  = {at={(0.5,-0.38)}, anchor=north, legend columns=1,
+                       font=\scriptsize\sffamily},
+      ylabel        = {Precision (\%)},
+      ylabel style  = {font=\scriptsize\sffamily},
+      symbolic x coords = {Baseline, {SC-LoRA}, {SC+Cstr},
+                           {MC-LoRA}, {MC+Cstr}},
+      xtick         = data,
+      xticklabel style = {font=\tiny\sffamily, rotate=35, anchor=east},
+      ymin=0, ymax=120,
+      ytick         = {0,50,100},
+      ymajorgrids   = true,
+      grid style    = {dashed, gray!30},
+      tick label style = {font=\tiny\sffamily},
+      every axis plot/.append style={line width=0.4pt},
+      title         = {(a) Routing precision},
+      title style   = {font=\scriptsize\sffamily},
+    ]
+      \addplot[fill=clrblue!55, draw=clrblue!80!black]
+        coordinates {(Baseline,0) ({SC-LoRA},100) ({SC+Cstr},100)
+                     ({MC-LoRA},100) ({MC+Cstr},100)};
+      \addplot[fill=clrorange!60, draw=clrorange!80!black]
+        coordinates {(Baseline,0) ({SC-LoRA},59.13) ({SC+Cstr},100)
+                     ({MC-LoRA},0.87) ({MC+Cstr},100)};
+      \legend{Format, Class/Eff.}
+    \end{axis}
+    \end{tikzpicture}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{0.49\columnwidth}
+    \centering
+    \begin{tikzpicture}
+    \begin{axis}[
+      xbar,
+      bar width     = 6pt,
+      enlarge y limits = 0.20,
+      width  = \linewidth,
+      height = 5.0cm,
+      xlabel        = {Dice (DSC)},
+      xlabel style  = {font=\scriptsize\sffamily},
+      symbolic y coords = {Baseline, {SC-LoRA}, {SC+Cstr},
+                           {MC-LoRA}, {MC+Cstr}, {Direct}},
+      ytick         = data,
+      yticklabel style = {font=\tiny\sffamily},
+      xmin=0, xmax=0.36,
+      xtick         = {0, 0.10, 0.20, 0.273},
+      xticklabel style = {font=\tiny\sffamily},
+      xmajorgrids   = true,
+      grid style    = {dashed, gray!30},
+      nodes near coords,
+      nodes near coords align = {horizontal},
+      every node near coord/.append style={font=\tiny\sffamily},
+      every axis plot/.append style={line width=0.4pt},
+      title         = {(b) Mean Dice},
+      title style   = {font=\scriptsize\sffamily},
+    ]
+      \addplot[fill=clrblue!45, draw=clrblue!70!black]
+        coordinates {
+          (0.000, Baseline)
+          (0.167, {SC-LoRA})
+          (0.273, {SC+Cstr})
+          (0.001, {MC-LoRA})
+          (0.273, {MC+Cstr})
+          (0.273, {Direct})
+        };
+      \draw[dashed, clrorange, semithick]
+        ({axis cs:0.273, Baseline}|-{rel axis cs:0,0}) --
+        ({axis cs:0.273, Baseline}|-{rel axis cs:0,1});
+    \end{axis}
+    \end{tikzpicture}
+  \end{minipage}
+  \caption{(a)~Routing precision: blue = format, orange = class/effective.
+    SC = single-class adapter, MC = multi-class adapter, +Cstr = constrained.
+    (b)~Mean Dice for all conditions; dashed line = direct VISTA3D ceiling
+    ($0.273$). Constrained variants of both adapters match the ceiling exactly.}
   \label{fig:routing_precision}
-\end{figure}
-
-% ── Figure: Detection Dice Comparison ───────────────────────────────────────
-\begin{figure}[tp]
-  \centering
-  \begin{tikzpicture}
-  \begin{axis}[
-    xbar,
-    bar width     = 7pt,
-    enlarge y limits = 0.18,
-    width  = \columnwidth,
-    height = 4.4cm,
-    xlabel        = {Mean Dice (DSC)},
-    xlabel style  = {font=\footnotesize\sffamily},
-    symbolic y coords = {Baseline, {SC-LoRA}, {SC+Cstr},
-                         {MC-LoRA}, {MC+Cstr}, {Direct VISTA3D}},
-    ytick         = data,
-    yticklabel style = {font=\scriptsize\sffamily},
-    xmin=0, xmax=0.34,
-    xtick         = {0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.273},
-    xticklabel style = {font=\scriptsize\sffamily},
-    xmajorgrids   = true,
-    grid style    = {dashed, gray!30},
-    nodes near coords,
-    nodes near coords align = {horizontal},
-    every node near coord/.append style={font=\scriptsize\sffamily},
-    every axis plot/.append style={line width=0.4pt},
-  ]
-    \addplot[fill=clrblue!45, draw=clrblue!70!black]
-      coordinates {
-        (0.000, Baseline)
-        (0.167, {SC-LoRA})
-        (0.273, {SC+Cstr})
-        (0.001, {MC-LoRA})
-        (0.273, {MC+Cstr})
-        (0.273, {Direct VISTA3D})
-      };
-    %% ceiling line
-    \draw[dashed, clrorange, semithick]
-      ({axis cs:0.273, Baseline}|-{rel axis cs:0,0}) --
-      ({axis cs:0.273, Baseline}|-{rel axis cs:0,1})
-      node[above, font=\scriptsize\sffamily, text=clrorange,
-           rotate=90, anchor=south] {ceiling 0.273};
-  \end{axis}
-  \end{tikzpicture}
-  \caption{Mean Dice (DSC) for all detection conditions on the 115-scan
-    LIDC-IDRI evaluation set. Constrained variants of both adapters
-    exactly match the direct VISTA3D ceiling (dashed orange line),
-    confirming that class-constrained inference fully closes the
-    detection gap without retraining.}
-  \label{fig:dice_comparison}
+  \phantomsection\label{fig:dice_comparison}
 \end{figure}
 
 % -- Retrieval table --------------------------------------------------------
@@ -784,51 +740,24 @@ cheap to learn, per-class binding scales with training signal clarity,
 and class-constrained inference provides a practical bridge between
 partial binding and deployment-grade precision.
 
-Figure~\ref{fig:umap} provides a complementary geometric view: UMAP
-projections of the last-token hidden states elicited by each of the five
-query types on 200 hold-out volumes. In the baseline (no LoRA), all five
-query classes overlap in a single cloud, confirming the absence of any
-query-conditioned structure in the pre-trained model. After multi-class
-fine-tuning, the \texttt{liver} class separates into a visually distinct
-cluster, consistent with its $100\%$ routing precision; \texttt{lung tumor}
-and \texttt{heart} show partial displacement away from the dominant cloud,
-and \texttt{aorta}/\texttt{lung} remain intermixed, mirroring the zero-format
-results. The geometric separation therefore directly reflects the routing
-table: classes that the adapter has learned to bind produce identifiably
-different hidden-state geometry for the same input volume under different
-queries.
+Figure~\ref{fig:umap} shows UMAP projections of last-token hidden states for
+200 hold-out volumes under all five query types. The baseline (no LoRA)
+produces a single undifferentiated cloud; after multi-class fine-tuning,
+\texttt{liver} separates into a distinct cluster matching its $100\%$ routing
+precision, while other classes show displacement proportional to their
+per-class results (Figure~\ref{fig:perclass_routing}).
 
 % ── Figure: UMAP query-conditioned embeddings ──────────────────────────────
 % Generated by: python src/viz/gen_umap.py --cache results/umap_embeddings.npz
 \begin{figure}[tp]
   \centering
   \includegraphics[width=\columnwidth]{figures/umap_multiclass.pdf}
-  \caption{UMAP projection of last-token hidden states for 200 CT-RATE
-    hold-out volumes queried with each of the five routing-class prompts
-    (1{,}000 points per panel, cosine distance).
-    \textbf{Left}: baseline VILA-M3 (no LoRA) --- all five query classes
-    occupy a single mixed cloud.
-    \textbf{Right}: multi-class LoRA adapter --- \texttt{liver} (teal
-    triangles) separates into a distinct cluster matching its $100\%$
-    routing precision; other classes show separation proportional to their
-    per-class routing results (Figure~\ref{fig:perclass_routing}).}
+  \caption{UMAP of last-token hidden states (200 volumes $\times$ 5 queries,
+    cosine distance). \textbf{Left}: baseline --- single undifferentiated cloud.
+    \textbf{Right}: fine-tuned --- \texttt{liver} (teal) separates clearly;
+    other classes displace proportionally to Figure~\ref{fig:perclass_routing}.}
   \label{fig:umap}
 \end{figure}
-
-\paragraph{Routing condition is bounded by the expert.}
-Because a correctly routed scan invokes exactly the same VISTA3D bundle as
-the direct-invocation baseline, the routed VLM cannot exceed the direct
-VISTA3D Dice of $0.273$ on \emph{any} scan it correctly routes. The routed
-mean Dice is therefore exactly $\text{class precision} \times 0.273$ up to
-small sub-population variance: at $59.13\%$ class precision we observe
-$0.167$ against the predicted $0.161$, and at $100\%$ effective class
-precision (under constrained decoding) we observe $0.273$ against the
-predicted $0.273$ -- a four-decimal match that empirically confirms the
-decomposition. The practical implication is that the VLM's contribution in
-this framework is the \emph{delegation decision}, not the segmentation
-itself: improving the chosen expert (or replacing VISTA3D with a
-nodule-specialised model) is the only architectural lever available to
-raise the ceiling. Segmentation quality is a property of VISTA3D.
 
 \paragraph{Data scale and contrastive transfer.}
 This work establishes a measurable data-scale boundary for contrastive
