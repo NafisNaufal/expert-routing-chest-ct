@@ -8,6 +8,8 @@
 \usepackage{tikz}
 \usetikzlibrary{shapes.geometric,arrows.meta,positioning,calc,fit,backgrounds}
 \usepackage{xcolor}
+\usepackage{microtype}        % reduces overfull hboxes throughout
+\usepackage{url}              % \nolinkurl{} allows line-breaks at / and -
 % ── custom palette (blue / orange / teal) ───────────────────────────────────
 \definecolor{clrblue}{RGB}{44,95,143}
 \definecolor{clrorange}{RGB}{204,113,0}
@@ -15,6 +17,7 @@
 \definecolor{clrgray}{RGB}{100,100,100}
 
 \begin{document}
+\sloppy   % allow slightly wider inter-word spacing to avoid overfull boxes
 
 \title{Multi-Class Expert Routing for Zero-Shot Chest CT Analysis via
 Vision--Language Models}
@@ -324,7 +327,7 @@ We apply Low-Rank Adaptation (LoRA)~\cite{lora2022}, a parameter-efficient
 fine-tuning strategy that builds on the adapter framework of
 Houlsby et al.~\cite{houlsby2019} while reducing parameter overhead through
 low-rank matrix decomposition, to the VILA-M3 8B checkpoint
-(\texttt{MONAI/Llama3-VILA-M3-8B}). The query and value projection matrices
+(\nolinkurl{MONAI/Llama3-VILA-M3-8B}). The query and value projection matrices
 of the language-model attention layers are targeted (the vision tower and
 multimodal projector remain frozen). The LoRA rank is set to $r = 16$ with a
 scaling factor $\alpha = 32$. Instruction data is constructed following the
