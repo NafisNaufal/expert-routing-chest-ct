@@ -405,9 +405,9 @@ not a format failure.
   \end{axis}
   \end{tikzpicture}
   \caption{Per-class routing precision (200 hold-out volumes, 1{,}000 queries).
-    \texttt{liver}: full binding ($100\%/100\%$);
-    \texttt{lung\,tumor} and \texttt{heart}: high format, zero class precision;
-    \texttt{aorta} and \texttt{lung}: no routing activation.}
+    \texttt{liver}: full binding; \texttt{lung\,tumor} and \texttt{heart}:
+    high format, zero class prec.\ (class confusion);
+    \texttt{aorta}/\texttt{lung}: zero format (routing not triggered).}
   \label{fig:perclass_routing}
 \end{figure}
 
@@ -495,9 +495,8 @@ classes at inference time.
       \addplot[fill=clrblue!45, draw=clrblue!70!black]
         coordinates {(0.000,Baseline)(0.167,{SC-LoRA})(0.273,{SC+Cstr})
                      (0.001,{MC-LoRA})(0.273,{MC+Cstr})(0.273,{Direct})};
-      \draw[dashed, clrorange, semithick]
-        ({axis cs:0.273, Baseline}|-{rel axis cs:0,0}) --
-        ({axis cs:0.273, Baseline}|-{rel axis cs:0,1});
+      \addplot[dashed, clrorange, semithick, forget plot]
+        coordinates {(0.273,Baseline)(0.273,{Direct})};
     \end{axis}
     \end{tikzpicture}
   \end{minipage}
