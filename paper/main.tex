@@ -310,7 +310,7 @@ fine-tuned VLM: as we show below and in Figure~\ref{fig:routing_precision}, the
 call format is learned completely while class identity is learned only partially.
 
 % -- Headline detection table -----------------------------------------------
-\begin{table}[tp]
+\begin{table}[!ht]
   \centering
   \caption{Zero-shot lung-lesion detection on LIDC-IDRI (115 scans,
     $\geq$3-radiologist consensus nodules). \textbf{Format prec.}\ = fraction
@@ -516,15 +516,23 @@ classes at inference time.
   \phantomsection\label{fig:dice_comparison}
 \end{figure}
 
+\paragraph{Retrieval.}
+Table~\ref{tab:retrieval} quantifies the data-scale threshold for
+contrastive LoRA transfer on a generative VLM. Both the pre-fine-tuned
+baseline and the LoRA-adapted model sit within noise of the $1/1000$
+random-chance reference on the held-out split, establishing that
+$9{,}000$ training pairs remains below the generalisation threshold for
+single-adapter contrastive transfer on an 8\,B-parameter generative model.
+Domain-matched dual-encoder models such as BiomedCLIP~\cite{biomedclip2023}
+and CT-CLIP~\cite{ctrate2024} reach competitive retrieval performance at
+$50{,}000$+ paired volumes, providing a concrete scale reference.
+
 % -- Retrieval table --------------------------------------------------------
-\begin{table}[tp]
+\begin{table}[!ht]
   \centering
   \caption{Text-to-image case retrieval on the CT-RATE 1{,}000-volume
-    hold-out. Recall@$K$ measures whether each radiology report retrieves
-    its own CT volume within the top-$K$ ranked candidates by cosine
-    similarity over last-token hidden-state embeddings. The random-chance
-    row provides the lower reference for a hold-out of this size ($1/1000$,
-    $5/1000$, $10/1000$).}
+    hold-out. Recall@$K$: fraction of radiology reports retrieving their own
+    CT volume within the top-$K$ candidates by cosine similarity.}
   \label{tab:retrieval}
   \begin{tabular}{lccc}
     \toprule
@@ -536,22 +544,6 @@ classes at inference time.
     \bottomrule
   \end{tabular}
 \end{table}
-
-\paragraph{Retrieval.}
-Table~\ref{tab:retrieval} quantifies the data-scale threshold for
-contrastive LoRA transfer on a generative VLM. The joint contrastive
-objective reduces training loss substantially (from $\ln 8 \approx 2.08$
-at initialisation to $\approx 1.29$ at the end of training), confirming
-that the adapter architecture is capable of fitting the training
-distribution. Both the pre-fine-tuned baseline and the LoRA-adapted model
-sit within noise of the $1/1000$ random-chance reference on the held-out
-split, establishing that $9{,}000$ training pairs remains below the
-generalisation threshold for single-adapter contrastive transfer on an
-8\,B-parameter generative model under in-batch negatives alone.
-Domain-matched dual-encoder models such as BiomedCLIP~\cite{biomedclip2023}
-and CT-CLIP~\cite{ctrate2024} reach competitive retrieval performance at
-$50{,}000$+ paired volumes, providing a concrete scale reference for future
-system design.
 
 \subsection{Discussion}\label{sec:discussion}
 
