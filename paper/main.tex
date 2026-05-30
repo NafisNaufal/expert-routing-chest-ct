@@ -10,6 +10,7 @@
 \usepackage{xcolor}
 \usepackage{microtype}        % reduces overfull hboxes throughout
 \usepackage{url}              % \nolinkurl{} allows line-breaks at / and -
+\usepackage{placeins}         % \FloatBarrier to stop floats drifting across sections
 % ── custom palette (blue / orange / teal) ───────────────────────────────────
 \definecolor{clrblue}{RGB}{44,95,143}
 \definecolor{clrorange}{RGB}{204,113,0}
@@ -131,6 +132,7 @@ evaluation on the CT-RATE hold-out split.
 
 
 % -----------------------------------------------------------------------
+\FloatBarrier
 \section{Related Work}
 % -----------------------------------------------------------------------
 
@@ -178,6 +180,7 @@ fine-grained spatial scale of pulmonary nodules.
 
 
 % -----------------------------------------------------------------------
+\FloatBarrier
 \section{Proposed Methodology}
 % -----------------------------------------------------------------------
 
@@ -433,6 +436,7 @@ time and discarding the raw NIfTI after extracting key axial slices.
 
 
 % -----------------------------------------------------------------------
+\FloatBarrier
 \section{Experimental Setup and Evaluation}
 % -----------------------------------------------------------------------
 
@@ -511,27 +515,6 @@ call format is learned completely while class identity is learned only partially
   \texttt{lung tumor} at inference time.}
 \end{table}
 
-% -- Retrieval table --------------------------------------------------------
-\begin{table}[htbp]
-  \centering
-  \caption{Text-to-image case retrieval on the CT-RATE 1{,}000-volume
-    hold-out. Recall@$K$ measures whether each radiology report retrieves
-    its own CT volume within the top-$K$ ranked candidates by cosine
-    similarity over last-token hidden-state embeddings. The random-chance
-    row provides the lower reference for a hold-out of this size ($1/1000$,
-    $5/1000$, $10/1000$).}
-  \label{tab:retrieval}
-  \begin{tabular}{lccc}
-    \toprule
-    Method                      & Recall@1 & Recall@5 & Recall@10 \\
-    \midrule
-    Random chance               & 0.10\%   & 0.50\%   & 1.00\% \\
-    VILA-M3 baseline (no LoRA)  & 0.10\%   & 0.40\%   & 1.10\% \\
-    Ours (joint LoRA)           & 0.20\%   & 0.50\%   & 1.40\% \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
 \paragraph{Detection.}
 Table~\ref{tab:detection} reports six detection conditions across two adapter
 configurations. The pre-fine-tuned VILA-M3 \emph{never} emits the expected
@@ -597,7 +580,7 @@ The resulting unconstrained Dice ($0.001$) on LIDC reflects near-zero
 \end{table}
 
 % ── Figure: Per-class routing precision ──────────────────────────────────────
-\begin{figure}[htbp]
+\begin{figure}[tp]
   \centering
   \begin{tikzpicture}
   \begin{axis}[
@@ -605,7 +588,7 @@ The resulting unconstrained Dice ($0.001$) on LIDC reflects near-zero
     bar width     = 6.5pt,
     enlarge y limits = 0.22,
     width  = \columnwidth,
-    height = 5.2cm,
+    height = 4.2cm,
     xlabel        = {Precision (\%)},
     xlabel style  = {font=\footnotesize\sffamily},
     symbolic y coords = {lung, aorta, heart, {lung tumor}, liver},
@@ -654,7 +637,7 @@ the ideal case that class-constrained inference replicates for all other
 classes at inference time.
 
 % ── Figure: Routing Precision Decomposition ─────────────────────────────────
-\begin{figure}[htbp]
+\begin{figure}[tp]
   \centering
   \begin{tikzpicture}
   \begin{axis}[
@@ -662,7 +645,7 @@ classes at inference time.
     bar width     = 6pt,
     enlarge x limits = 0.18,
     width  = \columnwidth,
-    height = 5.6cm,
+    height = 4.6cm,
     legend style  = {at={(0.5,-0.30)}, anchor=north, legend columns=-1,
                      font=\footnotesize\sffamily},
     ylabel        = {Precision (\%)},
@@ -700,7 +683,7 @@ classes at inference time.
 \end{figure}
 
 % ── Figure: Detection Dice Comparison ───────────────────────────────────────
-\begin{figure}[htbp]
+\begin{figure}[tp]
   \centering
   \begin{tikzpicture}
   \begin{axis}[
@@ -708,7 +691,7 @@ classes at inference time.
     bar width     = 7pt,
     enlarge y limits = 0.18,
     width  = \columnwidth,
-    height = 5.4cm,
+    height = 4.4cm,
     xlabel        = {Mean Dice (DSC)},
     xlabel style  = {font=\footnotesize\sffamily},
     symbolic y coords = {Baseline, {SC-LoRA}, {SC+Cstr},
@@ -749,6 +732,27 @@ classes at inference time.
     detection gap without retraining.}
   \label{fig:dice_comparison}
 \end{figure}
+
+% -- Retrieval table --------------------------------------------------------
+\begin{table}[htbp]
+  \centering
+  \caption{Text-to-image case retrieval on the CT-RATE 1{,}000-volume
+    hold-out. Recall@$K$ measures whether each radiology report retrieves
+    its own CT volume within the top-$K$ ranked candidates by cosine
+    similarity over last-token hidden-state embeddings. The random-chance
+    row provides the lower reference for a hold-out of this size ($1/1000$,
+    $5/1000$, $10/1000$).}
+  \label{tab:retrieval}
+  \begin{tabular}{lccc}
+    \toprule
+    Method                      & Recall@1 & Recall@5 & Recall@10 \\
+    \midrule
+    Random chance               & 0.10\%   & 0.50\%   & 1.00\% \\
+    VILA-M3 baseline (no LoRA)  & 0.10\%   & 0.40\%   & 1.10\% \\
+    Ours (joint LoRA)           & 0.20\%   & 0.50\%   & 1.40\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \paragraph{Retrieval.}
 Table~\ref{tab:retrieval} quantifies the data-scale threshold for
@@ -892,6 +896,7 @@ ceiling above $\mathrm{Dice}=0.273$ are left as immediate extensions.
 
 
 % -----------------------------------------------------------------------
+\FloatBarrier
 \section{Conclusion}
 % -----------------------------------------------------------------------
 
