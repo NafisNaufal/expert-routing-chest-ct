@@ -240,7 +240,7 @@ We apply Low-Rank Adaptation (LoRA)~\cite{lora2022}, a parameter-efficient
 fine-tuning strategy that builds on the adapter framework of
 Houlsby et al.~\cite{houlsby2019} while reducing parameter overhead through
 low-rank matrix decomposition, to the VILA-M3 8B checkpoint
-(\nolinkurl{MONAI/Llama3-VILA-M3-8B}). The query and value projection matrices
+(\path{MONAI/Llama3-VILA-M3-8B}). The query and value projection matrices
 of the language-model attention layers are targeted (the vision tower and
 multimodal projector remain frozen). The LoRA rank is set to $r = 16$ with a
 scaling factor $\alpha = 32$. Instruction data is constructed following the
@@ -315,26 +315,23 @@ call format is learned completely while class identity is learned only partially
 \begin{table}[!ht]
   \centering
   \caption{Zero-shot lung-lesion detection on LIDC-IDRI (115 scans,
-    $\geq$3-radiologist consensus nodules). \textbf{Format prec.}\ = fraction
-    emitting any \texttt{<VISTA3D(\textellipsis)>} token;
-    \textbf{Class prec.}\ = fraction emitting exactly
-    \texttt{<VISTA3D(lung tumor)>} (raw, before any inference-time constraint);
-    Dice and IoU averaged over all 115 scans (un-invoked scans contribute
-    zero). Direct VISTA3D invocation establishes the per-scan ceiling.
-    Multi-class rows evaluate the 5-class adapter on the same lung-tumor task.}
+    $\geq$3-radiologist consensus). \textbf{Fmt.\ prec.} = fraction emitting
+    any \texttt{<VISTA3D(\textellipsis)>}; \textbf{Cls.\ prec.} = fraction
+    emitting exactly \texttt{<VISTA3D(lung tumor)>} (raw); Dice/IoU averaged
+    over all 115 scans. SC = single-class adapter; MC = multi-class adapter.}
   \label{tab:detection}
   \begin{tabular}{lcccc}
     \toprule
-    Condition                                & Format prec. & Class prec. & Dice (DSC) & IoU \\
+    Condition                          & Fmt.\ prec. & Cls.\ prec. & Dice & IoU \\
     \midrule
-    VILA-M3 baseline (no LoRA)               & 0.00\%       & 0.00\%      & 0.000      & 0.000 \\
-    Direct VISTA3D (no VLM)                  & ---          & 100.00\%    & 0.273      & 0.201 \\
+    VILA-M3 baseline (no LoRA)         & 0.00\%      & 0.00\%      & 0.000 & 0.000 \\
+    Direct VISTA3D (no VLM)            & ---         & 100\%       & 0.273 & 0.201 \\
     \midrule
-    Single-class LoRA (9{,}000 pairs)        & 100.00\%     & 59.13\%     & 0.167      & 0.124 \\
-    \quad + class-constrained decoding       & 100.00\%     & 100.00\%\textsuperscript{*} & 0.273 & 0.201 \\
+    SC-LoRA (9\,k pairs)               & 100\%       & 59.13\%     & 0.167 & 0.124 \\
+    \quad{}+ constrained               & 100\%       & 100\%\textsuperscript{*} & 0.273 & 0.201 \\
     \midrule
-    Multi-class LoRA (39{,}000 samples, 5 classes) & 100.00\% & 0.87\%   & 0.001      & 0.001 \\
-    \textbf{\quad + class-constrained decoding} & \textbf{100.00\%} & \textbf{100.00\%}\textsuperscript{*} & \textbf{0.273} & \textbf{0.201} \\
+    MC-LoRA (39\,k, 5 classes)         & 100\%       & 0.87\%      & 0.001 & 0.001 \\
+    \textbf{\quad{}+ constrained}      & \textbf{100\%} & \textbf{100\%}\textsuperscript{*} & \textbf{0.273} & \textbf{0.201} \\
     \bottomrule
   \end{tabular}
   \\[2pt]
@@ -408,9 +405,9 @@ not a format failure.
   \end{axis}
   \end{tikzpicture}
   \caption{Per-class routing precision (200 hold-out volumes, 1{,}000 queries).
-    \texttt{liver}: full binding ($100\%/100\%$); \texttt{lung tumor}/\texttt{heart}:
-    high format, zero class (class confusion); \texttt{aorta}/\texttt{lung}:
-    no routing activation at this training scale.}
+    \texttt{liver}: full binding ($100\%/100\%$);
+    \texttt{lung\,tumor} and \texttt{heart}: high format, zero class precision;
+    \texttt{aorta} and \texttt{lung}: no routing activation.}
   \label{fig:perclass_routing}
 \end{figure}
 
@@ -496,14 +493,8 @@ classes at inference time.
       title style   = {font=\scriptsize\sffamily},
     ]
       \addplot[fill=clrblue!45, draw=clrblue!70!black]
-        coordinates {
-          (0.000, Baseline)
-          (0.167, {SC-LoRA})
-          (0.273, {SC+Cstr})
-          (0.001, {MC-LoRA})
-          (0.273, {MC+Cstr})
-          (0.273, {Direct})
-        };
+        coordinates {(0.000,Baseline)(0.167,{SC-LoRA})(0.273,{SC+Cstr})
+                     (0.001,{MC-LoRA})(0.273,{MC+Cstr})(0.273,{Direct})};
       \draw[dashed, clrorange, semithick]
         ({axis cs:0.273, Baseline}|-{rel axis cs:0,0}) --
         ({axis cs:0.273, Baseline}|-{rel axis cs:0,1});
@@ -515,7 +506,7 @@ classes at inference time.
     (b)~Mean Dice for all conditions; dashed line = direct VISTA3D ceiling
     ($0.273$). Constrained variants of both adapters match the ceiling exactly.}
   \label{fig:routing_precision}
-  \phantomsection\label{fig:dice_comparison}
+  \label{fig:dice_comparison}
 \end{figure}
 
 \paragraph{Retrieval.}
