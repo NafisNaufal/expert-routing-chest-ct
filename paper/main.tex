@@ -11,6 +11,11 @@
 \usepackage{microtype}        % reduces overfull hboxes throughout
 \usepackage{url}              % \nolinkurl{} allows line-breaks at / and -
 \usepackage{placeins}         % \FloatBarrier to stop floats drifting across sections
+% ── Tighten float/caption spacing to recover vertical space ─────────────────
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\floatsep}{6pt plus 1pt minus 1pt}
+\setlength{\abovecaptionskip}{4pt}
+\setlength{\belowcaptionskip}{2pt}
 % ── custom palette (blue / orange / teal) ───────────────────────────────────
 \definecolor{clrblue}{RGB}{44,95,143}
 \definecolor{clrorange}{RGB}{204,113,0}
@@ -111,47 +116,19 @@ pixel-level supervision. The framework is expert-agnostic.
 \section{Related Work}
 % -----------------------------------------------------------------------
 
-\subsection{Vision-Language Models in Radiology}
-
-Contrastive image-text pretraining, established by CLIP~\cite{clip2021}, has
-been adapted to the medical domain by methods such as MedCLIP~\cite{medclip2022}
-and BioViL-T~\cite{biovilt2023}. These approaches learn representations from
-unpaired or temporally paired radiology report-image corpora and achieve
-competitive zero-shot classification performance on chest X-ray benchmarks.
-More recent large multimodal models including Flamingo~\cite{flamingo2022},
-GPT-4V~\cite{gpt4_2023}, and Med-Gemini~\cite{medgemini2024} extend
-report-grounded reasoning to open-ended clinical question answering.
-However, these models remain constrained to 2D input modalities and lack
-mechanisms for volumetric spatial grounding.
-
-\subsection{3D Medical Image Analysis}
-
-Volumetric CT analysis has been dominated by convolutional architectures.
-nnU-Net~\cite{nnunet2021} established a robust self-configuring baseline for 3D
-segmentation across diverse clinical tasks. For pulmonary nodule detection
-specifically, 3D Faster R-CNN-based systems and sliding-window CNNs have been
-benchmarked through community challenges such as LUNA16~\cite{luna16}, setting
-strong supervised baselines on LIDC-IDRI~\cite{lidc2011}.
-TotalSegmentator~\cite{totalsegmentor2023} demonstrates the breadth of
-modern CT anatomy segmentation, covering 104 structures across the thorax,
-abdomen, and pelvis. VISTA3D~\cite{vista3d2024} extends this paradigm with a
-promptable 3D segmentation model that accepts text and point prompts, making
-it well-suited as a spatially-precise expert in a VLM routing architecture.
-
-\subsection{Expert-Routed and Agent-Based Medical VLMs}
-
-VILA-M3~\cite{vilaM32024} builds on the VILA visual language
-architecture~\cite{vila2024}, itself grounded in the LLaVA visual instruction
-tuning paradigm~\cite{llava2023} and the transformer-based LLaMA
-backbone~\cite{llama2023,transformer2017}, to introduce expert routing:
-the VLM's language head generates structured routing signals that invoke
-specialist models for tasks requiring high-resolution spatial reasoning. The
-MONAI VLM Agent Framework~\cite{monai2022} provides the infrastructure for
-this orchestration. Our work extends VILA-M3 to thoracic CT by fine-tuning the
-routing and language components on domain-specific data, and performs the first
-systematic zero-shot segmentation evaluation of the resulting system on
-LIDC-IDRI---a benchmark that no VLM has previously addressed due to the
-fine-grained spatial scale of pulmonary nodules.
+Contrastive VLMs such as CLIP~\cite{clip2021}, MedCLIP~\cite{medclip2022},
+and BioViL-T~\cite{biovilt2023} learn from image--text pairs and achieve
+strong zero-shot classification on chest X-rays. Larger multimodal models
+including GPT-4V~\cite{gpt4_2023} and Med-Gemini~\cite{medgemini2024} extend
+clinical reasoning but remain limited to 2D inputs. For volumetric CT,
+nnU-Net~\cite{nnunet2021} and LUNA16-benchmarked~\cite{luna16} CNNs set strong
+supervised detection baselines; VISTA3D~\cite{vista3d2024} extends this with
+a promptable 127-class 3D segmentor. VILA-M3~\cite{vilaM32024} builds on
+LLaVA~\cite{llava2023} and the LLaMA backbone~\cite{llama2023} to introduce
+expert routing within the MONAI VLM Agent Framework~\cite{monai2022}. Our
+work fine-tunes VILA-M3 on CT-RATE via LoRA~\cite{lora2022} for
+thoracic-specific routing and performs the first zero-shot VLM segmentation
+evaluation on LIDC-IDRI.
 
 
 % -----------------------------------------------------------------------
@@ -187,80 +164,38 @@ provides an overview of the system.
 
 \begin{figure}[tp]
   \centering
+  \resizebox{\columnwidth}{!}{%
   \begin{tikzpicture}[
-    font=\footnotesize\sffamily,
-    io/.style={draw=clrgray!70, fill=gray!6, rounded corners=2.5pt,
-               minimum width=3.1cm, minimum height=0.68cm,
-               align=center, inner sep=3pt},
-    vlm/.style={draw=clrblue, fill=clrblue!8, rounded corners=3pt,
-                minimum width=4.0cm, minimum height=1.15cm,
-                align=center, inner sep=4pt},
-    cstr/.style={draw=clrorange, fill=clrorange!8, rounded corners=2.5pt,
-                 minimum width=4.0cm, minimum height=0.68cm,
-                 align=center, inner sep=3pt},
-    exp/.style={draw=clrteal, fill=clrteal!8, rounded corners=2.5pt,
-                minimum width=4.0cm, minimum height=0.68cm,
+    font=\small\sffamily,
+    box/.style={draw=clrgray!70, fill=gray!6, rounded corners=2pt,
+                minimum width=2.3cm, minimum height=0.75cm,
                 align=center, inner sep=3pt},
+    vlm/.style={box, draw=clrblue, fill=clrblue!8, minimum width=2.8cm,
+                minimum height=0.85cm},
+    cbox/.style={box, draw=clrorange, fill=clrorange!8},
+    ebox/.style={box, draw=clrteal,   fill=clrteal!8},
     arr/.style={-Stealth, semithick, clrgray},
-    note/.style={font=\scriptsize\sffamily, text=clrgray, align=left},
   ]
-    %% ── inputs ───────────────────────────────────────────────────
-    \node[io] (ct) at (0.00, 0.00)
-        {CT Volume\\ {\scriptsize 8 key axial slices}};
-    \node[io] (q)  at (4.20, 0.00)
-        {Clinical Query\\ {\scriptsize task-conditioned}};
+    \node[box]  (inp)  at (0.0,0) {CT + Query};
+    \node[vlm]  (vlm)  at (2.9,0) {\textbf{VILA-M3 8B}\\{\scriptsize LoRA, CT-RATE}};
+    \node[box]  (tok)  at (5.9,0) {\texttt{<VISTA3D}\\{\scriptsize \texttt{(class)>}}};
+    \node[cbox] (cstr) at (8.7,0) {Class\\Constraint};
+    \node[ebox] (v3d)  at (11.4,0){VISTA3D\\{\scriptsize 127 classes}};
+    \node[box]  (out)  at (13.9,0){Mask\\{\scriptsize Dice 0.273}};
 
-    %% ── VLM ──────────────────────────────────────────────────────
-    \node[vlm] (vlm) at (2.10,-1.40)
-        {\textbf{VILA-M3 8B}\\[1pt]
-         LoRA ($r{=}16$, $\alpha{=}32$)\\[1pt]
-         {\scriptsize fine-tuned on CT-RATE (39\,k samples)}};
-
-    %% ── raw token ────────────────────────────────────────────────
-    \node[io]   (tok)  at (2.10,-3.00)
-        {\texttt{<VISTA3D(\textit{class})>}\\
-         {\scriptsize raw routing token}};
-
-    %% ── constraint ───────────────────────────────────────────────
-    \node[cstr] (cstr) at (2.10,-4.20)
-        {\textbf{Class-Constrained Inference}\\
-         {\scriptsize rewrite token to task-relevant class}};
-
-    %% ── expert ───────────────────────────────────────────────────
-    \node[exp]  (v3d)  at (2.10,-5.35)
-        {\textbf{VISTA3D Expert}\\
-         {\scriptsize 127-class 3-D CT segmentor}};
-
-    %% ── output ───────────────────────────────────────────────────
-    \node[io]   (out)  at (2.10,-6.50)
-        {Segmentation Mask\\
-         {\scriptsize Dice\;0.273 \quad IoU\;0.201}};
-
-    %% ── arrows ───────────────────────────────────────────────────
-    \draw[arr] (ct.south) |- (vlm.north west);
-    \draw[arr] (q.south)  |- (vlm.north east);
+    \draw[arr] (inp)  -- (vlm);
     \draw[arr] (vlm)  -- (tok);
     \draw[arr] (tok)  -- (cstr);
     \draw[arr] (cstr) -- (v3d);
     \draw[arr] (v3d)  -- (out);
 
-    %% ── side annotations ─────────────────────────────────────────
-    \node[note, right=0.38cm of tok]
-        (n1) {Format 100\%\\all trained configs};
-    \node[note, right=0.38cm of cstr]
-        (n2) {Class prec.\ $\to$ 100\%\\Dice 0.167$\to$0.273};
-    \draw[dashed, clrgray!50, thin] (tok.east)  -- (n1.west);
-    \draw[dashed, clrgray!50, thin] (cstr.east) -- (n2.west);
-
-    %% ── 5-class vocabulary note ──────────────────────────────────
-    \node[font=\scriptsize\sffamily, text=black!55, below=0.35cm of out,
-          align=center]
-        {Routing vocabulary:\quad\texttt{lung\,tumor}\;$\cdot$\;\texttt{heart}
-         \;$\cdot$\;\texttt{liver}\;$\cdot$\;\texttt{aorta}\;$\cdot$\;\texttt{lung}};
-  \end{tikzpicture}
-  \caption{Framework overview. VILA-M3 (LoRA-adapted) emits a routing token;
-    class-constrained inference rewrites it to the task-relevant VISTA3D class,
-    closing the format--class precision gap.}
+    \node[font=\scriptsize\sffamily, text=black!55, below=0.5cm of cstr, align=center]
+        {5-class vocabulary:\;\texttt{lung tumor} $\cdot$ \texttt{heart}
+         $\cdot$ \texttt{liver} $\cdot$ \texttt{aorta} $\cdot$ \texttt{lung}};
+  \end{tikzpicture}}
+  \caption{Framework overview. VILA-M3 (LoRA-adapted on CT-RATE) emits a
+    structured routing token; class-constrained inference rewrites it to the
+    task-relevant VISTA3D class, closing the format--class precision gap.}
   \label{fig:architecture}
 \end{figure}
 
@@ -340,57 +275,6 @@ one fine-tuned model serves both downstream tasks:
     no auxiliary text generation is used for retrieval.
 \end{itemize}
 
-Figure~\ref{fig:training_pipeline} summarises the multi-class sample
-construction pipeline.
-
-% ── Figure: Multi-class training data pipeline ───────────────────────────────
-\begin{figure}[tp]
-  \centering
-  \begin{tikzpicture}[
-    font=\footnotesize\sffamily,
-    stage/.style={draw=clrblue!60, fill=clrblue!7, rounded corners=3pt,
-                  minimum width=2.1cm, minimum height=0.75cm,
-                  align=center, inner sep=3pt},
-    cls/.style={draw=clrteal!60, fill=clrteal!7, rounded corners=2pt,
-                minimum width=1.55cm, minimum height=0.60cm,
-                align=center, inner sep=2pt, font=\scriptsize\sffamily\ttfamily},
-    neg/.style={draw=clrorange!60, fill=clrorange!7, rounded corners=2pt,
-                minimum width=1.55cm, minimum height=0.60cm,
-                align=center, inner sep=2pt, font=\scriptsize\sffamily},
-    arr/.style={-Stealth, semithick, clrgray},
-    fan/.style={-Stealth, thin, clrteal!70},
-    lbl/.style={font=\scriptsize\sffamily, text=clrgray},
-  ]
-    %% stages
-    \node[stage] (vol)  at (0.00,0) {CT-RATE\\Volume};
-    \node[stage] (slc)  at (2.30,0) {Extract\\8 Slices};
-    \node[stage] (rep)  at (4.60,0) {Report\\Analysis};
-    \node[stage] (samp) at (6.90,0) {Instruction\\Samples};
-
-    \draw[arr] (vol)  -- (slc);
-    \draw[arr] (slc)  -- (rep);
-    \draw[arr] (rep)  -- (samp);
-
-    %% 5-class fan out below samp
-    \node[cls] (c1) at (5.10,-1.55) {lung tumor};
-    \node[cls] (c2) at (6.60,-1.55) {heart};
-    \node[cls] (c3) at (8.10,-1.55) {liver};
-    \node[cls] (c4) at (5.85,-2.40) {aorta};
-    \node[cls] (c5) at (7.35,-2.40) {lung};
-    \node[neg] (c6) at (6.60,-3.25) {descriptive\\negative};
-
-    \foreach \t in {c1,c2,c3,c4,c5,c6}
-      \draw[fan] (samp.south) -- (\t.north);
-
-    %% total annotation
-    \node[lbl, right=0.15cm of samp, yshift=-1.20cm, align=left]
-        {\textbf{39\,430}\\total samples\\5 classes\\ + negatives};
-  \end{tikzpicture}
-  \caption{Multi-class data construction. Each volume yields up to six
-    instruction samples (one per applicable class + one negative); 39{,}430
-    samples total are used to train a single LoRA adapter jointly.}
-  \label{fig:training_pipeline}
-\end{figure}
 
 Training uses a single NVIDIA A100 80\,GB GPU (HPC AI-Center, Universitas
 Brawijaya) via the PyTorch cu118 stack. The AdamW optimiser runs at
@@ -405,39 +289,16 @@ and discarded after slice extraction to stay within server storage limits.
 \section{Experimental Setup and Evaluation}
 % -----------------------------------------------------------------------
 
-\subsection{Baseline Models}
+\subsection{Baselines and Metrics}
 
 The adapted framework is compared against two reference conditions:
 
-\begin{enumerate}
-  \item \textbf{Detection baseline.} VISTA3D invoked directly with the
-    \texttt{lung tumor} class prompt, without any VLM routing, to isolate
-    the contribution of instruction-tuned routing over na\"{i}ve expert
-    invocation and to establish the per-scan ceiling under the chosen
-    proxy-expert configuration.
-
-  \item \textbf{Retrieval baseline.} The pre-fine-tuned VILA-M3 8B checkpoint
-    (no CT-RATE LoRA) to measure the gain from routing-specific adaptation,
-    alongside a random-selection reference that establishes the lower bound
-    for a 1{,}000-volume hold-out pool.
-\end{enumerate}
-
-\subsection{Evaluation Metrics}
-
-\textbf{Zero-Shot Abnormality Detection (LIDC-IDRI).}
-Detection is performed via voxel-level segmentation: VISTA3D produces a
-binary mask for the \texttt{lung tumor} class, which is evaluated against
-the four-radiologist consensus contours from LIDC-IDRI. Performance is
-measured using Dice Similarity Coefficient (DSC)~\cite{milletari2016} as the primary metric and
-Intersection over Union (IoU) as the secondary metric. These overlap-based
-metrics are the standard for segmentation-based detection in medical imaging
-and directly reflect the spatial precision of nodule localisation.
-
-\textbf{Text-to-Image Case Retrieval (CT-RATE hold-out).}
-Performance is measured using Recall@$K$ for $K \in \{1, 5, 10\}$. In clinical
-triage, retrieving the correct historical case within the top-$K$ results
-translates directly to workflow efficiency; Recall@$K$ provides a direct measure
-of the model's practical utility for semantic case search.
+Two baselines are used: (i)~direct VISTA3D with \texttt{lung tumor} prompt
+(no VLM), establishing the per-scan ceiling; and (ii)~pre-fine-tuned
+VILA-M3 (no CT-RATE LoRA), alongside random retrieval, as the lower bound.
+Detection is evaluated by Dice Similarity Coefficient (DSC)~\cite{milletari2016}
+and IoU against LIDC-IDRI expert contours. Retrieval uses Recall@$K$ for
+$K \in \{1, 5, 10\}$ on the 1{,}000-volume CT-RATE hold-out.
 
 \subsection{Results}
 
@@ -501,23 +362,14 @@ succeeds, the VLM achieves the per-scan VISTA3D ceiling}; the deficit is
 entirely a class-selection error, not a segmentation deficiency.
 
 \textbf{Multi-class adapter.}
-Fine-tuning on 39{,}000 samples covering five routing classes trains the VLM
-to differentiate query intent. Figure~\ref{fig:perclass_routing} reports the
-per-class routing precision on the CT-RATE hold-out. The \texttt{liver} class
-achieves $100\%$ format and $100\%$ class precision, demonstrating that the
-multi-class routing architecture works in principle: given sufficient and
-distinctive training signal, the adapter fully learns query-conditioned
-class binding. The \texttt{lung tumor} class achieves $97\%$ format precision
-but $0\%$ raw class precision --- the routing token is emitted but maps to
-the most strongly learned class (\texttt{liver}) rather than
-\texttt{lung tumor}. The \texttt{aorta} and \texttt{lung} classes receive
-$0\%$ format precision, indicating that the routing trigger itself was not
-activated for those queries at this training scale. The per-class variance
-reflects differences in training-signal clarity: \texttt{liver} benefits
-from highly distinctive report cues (\textit{``liver''}, \textit{``hepatic''})
-while \texttt{aorta} and \texttt{lung} share vocabulary with other classes.
-The resulting unconstrained Dice ($0.001$) on LIDC reflects near-zero
-\texttt{lung tumor} invocation, not a failure of the routing format.
+Figure~\ref{fig:perclass_routing} reports per-class routing precision.
+\texttt{Liver} achieves $100\%/100\%$ (format/class), proving
+query-conditioned routing is learnable. \texttt{Lung tumor} shows $97\%$
+format but $0\%$ class (token maps to the dominant class \texttt{liver}
+instead); \texttt{aorta} and \texttt{lung} show $0\%$ format (routing
+trigger not activated). These two failure modes reflect training-data
+vocabulary overlap; unconstrained Dice ($0.001$) reflects class confusion,
+not a format failure.
 
 % ── Figure: Per-class routing precision ──────────────────────────────────────
 \begin{figure}[tp]
@@ -758,18 +610,6 @@ per-class results (Figure~\ref{fig:perclass_routing}).
     other classes displace proportionally to Figure~\ref{fig:perclass_routing}.}
   \label{fig:umap}
 \end{figure}
-
-\paragraph{Data scale and contrastive transfer.}
-This work establishes a measurable data-scale boundary for contrastive
-adaptation of generative VLMs. Training loss reduction confirms that the
-single LoRA adapter successfully acquires cross-modal alignment on the
-training distribution; the held-out evaluation quantifies the scale at
-which that alignment generalises. At $9{,}000$ pairs the generalisation
-threshold has not yet been reached, providing a concrete lower bound for
-practitioners designing retrieval-capable VLM pipelines: below this
-threshold, a purpose-built dual-encoder remains the appropriate retrieval
-component, while the generative VLM contributes detection routing and
-clinical language understanding.
 
 \paragraph{Expert--task class match.}
 The detection ceiling established by direct VISTA3D
