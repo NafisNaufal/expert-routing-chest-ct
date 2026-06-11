@@ -646,15 +646,22 @@ while the generative VLM's contribution is detection routing and clinical
 language understanding.
 
 \paragraph{Expert--task class match.}
-The detection ceiling established by direct VISTA3D
-($\mathrm{Dice}=0.273$) reflects a known constraint: VISTA3D's
-\texttt{lung tumor} class is trained on lung mass annotations and is not
-specialised for the small pulmonary nodules that dominate the LIDC-IDRI
-ground truth. We adopt this class as the closest open-source proxy expert
-because no multi-class 3D CT segmentation model with a nodule-specific class
-is currently available; the resulting overlap therefore characterises the
-match between VISTA3D's lung-mass prior and LIDC nodule contours, not the
-upper bound of nodule segmentation in general.
+The detection ceiling ($\mathrm{Dice}=0.273$, Dice\,$>0$ on 60\% of scans)
+reflects an expert-task morphological mismatch rather than a nodule-size
+problem. The $\geq\!3$-radiologist consensus selection criterion
+naturally favours conspicuous, larger nodules: across the 247 nodule
+annotations in the 115-scan evaluation subset, the mean effective diameter
+is $14.1\pm8.5$\,mm (median 10.8\,mm, range $[5.0,\,43.5]$\,mm);
+53.8\% of nodules exceed 10\,mm and only 3.6\% are below 6\,mm.
+Despite this size advantage, VISTA3D's \texttt{lung tumor} class misses
+40\% of scans. The mismatch is morphological: VISTA3D's lung-mass prior
+is trained on irregular, contiguous masses (late-stage primary tumours),
+whereas LIDC-IDRI nodules---even at $>10$\,mm---are typically
+well-circumscribed spherical structures. We adopt this class as the
+closest open-source proxy expert because no multi-class 3D CT segmentation
+model with a nodule-specific class is currently available; the resulting
+overlap therefore characterises the mass-prior/nodule-contour mismatch,
+not the upper bound of nodule segmentation in general.
 
 \textbf{Clinical context.} For reference, supervised CNN detectors on
 LIDC-IDRI achieve Dice~$>0.6$ on comparable consensus-nodule
@@ -679,10 +686,11 @@ signed-rank tests are now reported for all detection conditions
 is a structural consequence of the expert-task class mismatch: VISTA3D's
 lung-mass prior yields Dice\,$>0$ on only 60\% of scans (69/115),
 producing a binary detection distribution rather than a normally distributed
-error. Sensitivity and false-positive rate per scan, together with the
-nodule size distribution of the 115-scan subset, would further clarify
-this mismatch quantitatively but require negative cases beyond this
-consensus-only subset. The per-class routing results
+error. The nodule size distribution of the 115-scan subset is now characterised
+(mean $14.1\pm8.5$\,mm; see Expert--task class match paragraph above),
+confirming the mismatch is morphological rather than size-driven.
+Sensitivity and false-positive rate per scan require negative cases
+beyond this consensus-only subset and remain future work. The per-class routing results
 (Figure~\ref{fig:perclass_routing}) show that at the current training scale
 only \texttt{liver} achieves full binding without constraint; scaling the
 per-class training corpus or applying balanced over-sampling would directly
