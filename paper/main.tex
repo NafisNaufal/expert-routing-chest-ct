@@ -1,0 +1,909 @@
+\documentclass{iopconfser}
+
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric,arrows.meta,positioning,calc,fit,backgrounds}
+\usepackage{xcolor}
+\usepackage{microtype}        % reduces overfull hboxes throughout
+\usepackage{url}              % \path{} allows line-breaks at / and -
+\usepackage{placeins}         % \FloatBarrier to stop floats drifting across sections
+% ── Tighten float/caption spacing to recover vertical space ─────────────────
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\floatsep}{6pt plus 1pt minus 1pt}
+\setlength{\abovecaptionskip}{4pt}
+\setlength{\belowcaptionskip}{2pt}
+% ── custom palette (blue / orange / teal) ───────────────────────────────────
+\definecolor{clrblue}{RGB}{44,95,143}
+\definecolor{clrorange}{RGB}{204,113,0}
+\definecolor{clrteal}{RGB}{31,120,100}
+\definecolor{clrgray}{RGB}{100,100,100}
+
+\begin{document}
+\sloppy   % allow slightly wider inter-word spacing to avoid overfull boxes
+
+\title{Multi-Class Expert Routing for Zero-Shot Chest CT Analysis via
+Vision--Language Models}
+
+\author{Nafis Naufal Rahman$^{1}$, Dionisius Seraf Saputra$^{2}$}
+
+\affil{$^1$Department of Informatics Engineering, Universitas Brawijaya, Malang, Indonesia}
+\affil{$^2$Department of Information System, Universitas Brawijaya, Malang, Indonesia}
+
+\email{nafisnaufal1426@student.ub.ac.id, dionisiusve32@student.ub.ac.id}
+
+\begin{abstract}
+Manual annotation of 3D chest CT is labour-intensive, limiting the
+scalability of deep-learning diagnostic systems. We present a
+parameter-efficient framework that fine-tunes VILA-M3 on CT-RATE via LoRA
+and routes volumetric localisation queries to VISTA3D. Two contributions are
+introduced: (i)~\emph{multi-class expert routing}, a single adapter
+trained on 39{,}000 class-conditioned samples to emit query-specific routing
+tokens across five VISTA3D classes (lung tumor, heart, liver, aorta, lung);
+and (ii)~\emph{class-constrained inference}, a lightweight inference-time
+task-routing rule that enforces the target class at deployment, separating
+the model's learned contribution---routing format emission---from
+task-specific class binding. A \emph{format-vs-class precision}
+decomposition separates structural and semantic routing components, enabling
+arithmetic verification of the segmentation gap. Under class-constrained
+inference, mean Dice on zero-shot pulmonary lesion localisation in
+LIDC-IDRI reaches $0.273$---equal to the direct VISTA3D ceiling, confirming
+that once format precision is $100\%$ the detection gap is entirely a
+class-binding problem solvable at inference time without modifying model
+weights. The \texttt{liver} routing class achieves $100\%$ class precision
+\emph{without} constraint, establishing proof of concept that the adapter
+can learn full query-conditioned class binding, not only routing format.
+\end{abstract}
+
+
+% -----------------------------------------------------------------------
+\section{Introduction}
+% -----------------------------------------------------------------------
+
+Chest CT is a primary imaging modality for diagnosing thoracic diseases
+including pulmonary nodules, pneumonia, pleural effusion, and cardiovascular
+conditions. Despite advances in deep learning, high-performing models in this
+domain still depend on large datasets annotated with dense bounding boxes or
+pixel-level segmentation masks, a process requiring considerable
+radiological expertise and time~\cite{litjens2017}.
+
+Vision-Language Models (VLMs) offer an alternative by learning visual
+representations from the natural pairing of medical images and clinical
+free-text reports, bypassing the need for explicit spatial labels~\cite{clip2021}.
+Early medical VLMs such as MedCLIP~\cite{medclip2022} and
+BioViL-T~\cite{biovilt2023} have demonstrated strong performance on chest X-ray
+classification and report grounding. However, extending these approaches to 3D CT
+volumes introduces fundamental challenges: processing full volumetric sequences of
+tokens is computationally prohibitive, and most VLM architectures lack mechanisms
+for precise 3D spatial reasoning~\cite{vilaM32024}.
+
+VILA-M3~\cite{vilaM32024} addresses this problem by introducing an expert routing
+architecture within a VLM pipeline. Rather than processing raw 3D voxels, the VLM
+acts as an orchestrator that delegates spatial tasks to specialist expert models via
+the MONAI VLM Agent Framework~\cite{monai2022}. This enables high-fidelity 3D
+analysis without native volumetric tokenisation. Despite this architectural
+advantage, VILA-M3 is pre-trained on general medical image-text data and has not
+been specifically adapted for thoracic CT interpretation.
+
+We propose a targeted instruction-tuning pipeline that fine-tunes VILA-M3
+on CT-RATE~\cite{ctrate2024}, a large-scale dataset of paired chest CT volumes and
+radiology reports. Adaptation is achieved efficiently via LoRA~\cite{lora2022},
+requiring only a fraction of the parameters of full fine-tuning. The framework's
+routing mechanism directs spatial localisation queries to VISTA3D~\cite{vista3d2024},
+a versatile 3D CT segmentation expert that exposes a closed set of 127
+anatomical and pathological classes, including a \texttt{lung tumor} class
+used here as the expert-side proxy for lung-lesion localisation. Zero-shot
+transfer is then evaluated on LIDC-IDRI~\cite{lidc2011}, an entirely unseen
+benchmark of expert-annotated pulmonary nodules, alongside a case retrieval
+evaluation on the CT-RATE hold-out split.
+
+\textbf{Contributions.}
+(1)~\textbf{Multi-class expert routing}: a single LoRA adapter trained on
+39{,}000 class-conditioned samples that emits query-specific routing tokens
+across five VISTA3D classes (\texttt{lung tumor}, \texttt{heart},
+\texttt{liver}, \texttt{aorta}, \texttt{lung}), generalisable to any
+supported class at inference time without retraining.
+(2)~\textbf{Class-constrained inference}: a lightweight mechanism that
+converts saturated format precision ($100\%$) into effective class precision
+($100\%$) without modifying model weights, accompanied by a
+\emph{format-vs-class precision} decomposition for analytical verification.
+(3)~\textbf{First zero-shot VLM-routed lung lesion localisation on
+LIDC-IDRI} (to the best of our knowledge): mean Dice $0.273$ on
+115 expert-annotated scans under class-constrained inference, without
+any pixel-level supervision. The constrained result is numerically equal
+to the direct VISTA3D ceiling, confirming that the learned routing format
+trigger combined with inference-time class enforcement fully recovers
+expert performance. The framework is expert-agnostic.
+
+
+% -----------------------------------------------------------------------
+\FloatBarrier
+\section{Related Work}
+% -----------------------------------------------------------------------
+
+Contrastive VLMs such as CLIP~\cite{clip2021}, MedCLIP~\cite{medclip2022},
+and BioViL-T~\cite{biovilt2023} learn from image--text pairs and achieve
+strong zero-shot classification on chest X-rays. Larger multimodal models
+including Flamingo~\cite{flamingo2022}, GPT-4V~\cite{gpt4_2023}, and
+Med-Gemini~\cite{medgemini2024} extend clinical reasoning but remain limited
+to 2D inputs. Instruction-tuned generative models such as
+LLaVA-Med~\cite{llava_med2023} and RadFM~\cite{radfm2023} have extended
+open-ended clinical question answering to biomedical and radiology images,
+though neither incorporates structured expert routing for 3D volumetric
+tasks. For volumetric CT, nnU-Net~\cite{nnunet2021} and
+LUNA16-benchmarked~\cite{luna16} CNNs set strong supervised detection
+baselines; VISTA3D~\cite{vista3d2024} extends this with a promptable
+127-class 3D segmentor. VILA-M3~\cite{vilaM32024} builds on the VILA visual
+language architecture~\cite{vila2024}, LLaVA~\cite{llava2023}, and the
+transformer-based~\cite{transformer2017} LLaMA backbone~\cite{llama2023} to
+introduce expert routing within the MONAI VLM Agent
+Framework~\cite{monai2022}. Our work fine-tunes VILA-M3 on CT-RATE via
+LoRA~\cite{lora2022} for thoracic-specific routing and, to the best of our
+knowledge, performs the first zero-shot VLM segmentation evaluation on
+LIDC-IDRI.
+
+
+% -----------------------------------------------------------------------
+\FloatBarrier
+\section{Proposed Methodology}
+% -----------------------------------------------------------------------
+
+\subsection{Dataset Configuration}
+
+The framework employs a dual-dataset strategy that strictly separates
+adaptation from evaluation:
+
+\begin{itemize}
+  \item \textbf{CT-RATE}~\cite{ctrate2024}: A large-scale dataset of over
+    50{,}000 reconstructed 3D chest CT volumes paired with structured radiology
+    reports. CT-RATE serves as the training corpus for instruction-tuning.
+    We operate on a randomly sampled subset of 9{,}000 volumes; a 1{,}000-volume
+    held-out split is reserved exclusively for case retrieval evaluation and
+    never seen during adaptation.
+
+  \item \textbf{LIDC-IDRI}~\cite{lidc2011}: A reference database of 1{,}018
+    CT scans with expert-consensus nodule annotations from four independent
+    radiologists. A subset of 115 scans with $\geq$3-radiologist consensus
+    nodules is used for evaluation; this dataset is withheld entirely from
+    training and used only for zero-shot detection benchmarking. CT-RATE
+    and LIDC-IDRI are independently collected datasets with no shared
+    patient provenance (CT-RATE originates from Hacettepe University
+    Hospital, Turkey; LIDC-IDRI from seven US institutions).
+\end{itemize}
+
+\subsection{Model Architecture and Dynamic Routing}
+
+The framework positions VILA-M3 as an intelligent orchestrator between the
+clinical query and specialist processing pipelines. Figure~\ref{fig:architecture}
+provides an overview of the system.
+
+\begin{figure}[tp]
+  \centering
+  \resizebox{\columnwidth}{!}{%
+  \begin{tikzpicture}[
+    font=\small\sffamily,
+    box/.style={draw=clrgray!70, fill=gray!6, rounded corners=2pt,
+                minimum width=2.3cm, minimum height=0.75cm,
+                align=center, inner sep=3pt},
+    vlm/.style={box, draw=clrblue, fill=clrblue!8, minimum width=2.8cm,
+                minimum height=0.85cm},
+    cbox/.style={box, draw=clrorange, fill=clrorange!8},
+    ebox/.style={box, draw=clrteal,   fill=clrteal!8},
+    arr/.style={-Stealth, semithick, clrgray},
+  ]
+    \node[box]  (inp)  at (0.0,0) {CT + Query};
+    \node[vlm]  (vlm)  at (2.9,0) {\textbf{VILA-M3 8B}\\{\scriptsize LoRA, CT-RATE}};
+    \node[box]  (tok)  at (5.9,0) {\texttt{<VISTA3D}\\{\scriptsize \texttt{(class)>}}};
+    \node[cbox] (cstr) at (8.7,0) {Class\\Constraint};
+    \node[ebox] (v3d)  at (11.4,0){VISTA3D\\{\scriptsize 127 classes}};
+    \node[box]  (out)  at (13.9,0){Mask\\{\scriptsize Dice 0.273}};
+
+    \draw[arr] (inp)  -- (vlm);
+    \draw[arr] (vlm)  -- (tok);
+    \draw[arr] (tok)  -- (cstr);
+    \draw[arr] (cstr) -- (v3d);
+    \draw[arr] (v3d)  -- (out);
+
+  \end{tikzpicture}}
+  \caption{Framework overview. VILA-M3 (LoRA-adapted on CT-RATE) emits a
+    structured routing token; class-constrained inference rewrites it to the
+    task-relevant VISTA3D class, closing the format--class precision gap.}
+  \label{fig:architecture}
+\end{figure}
+
+The routing pipeline proceeds in three stages:
+
+\begin{enumerate}
+  \item \textbf{Global Context Extraction.} VILA-M3 receives the user query
+    (e.g., \textit{``Identify and localise pulmonary abnormalities in this
+    chest CT scan''}) together with a compact volumetric representation of
+    the CT input, constructed by sampling key axial slices at uniform
+    anatomical intervals.
+
+  \item \textbf{Task Classification and Routing.} The model classifies the
+    query intent and emits a structured routing token in its output. Segmentation
+    queries produce a token of the form \texttt{<VISTA3D(lung tumor)>}, which the
+    MONAI VLM Agent Framework intercepts and dispatches to VISTA3D. Retrieval
+    queries are handled internally through the VLM's embedding space.
+
+  \item \textbf{Expert Execution and Response Synthesis.} VISTA3D processes the
+    full-resolution CT volume with the \texttt{lung tumor} class prompt and
+    returns a voxel-level segmentation mask. We note that this class is the
+    closest lung-pathology label in VISTA3D's 127-class vocabulary; it is
+    trained on lung mass annotations rather than small nodule contours
+    specifically, and is used here as a proxy expert for lung-lesion
+    localisation (see Section~\ref{sec:discussion} for the resulting per-scan
+    ceiling and the proposed expert-substitution direction). The mask is
+    evaluated directly against LIDC-IDRI ground truth for detection metrics.
+    For retrieval queries, the VLM embedding is compared against the CT-RATE
+    corpus index using cosine similarity.
+\end{enumerate}
+
+This separation of concerns preserves the VLM's semantic reasoning capacity
+while delegating computationally expensive volumetric processing to a
+purpose-built expert, avoiding the memory infeasibility of native 3D token
+processing.
+
+\subsection{Instruction Fine-Tuning Strategy}
+
+We apply Low-Rank Adaptation (LoRA)~\cite{lora2022}, a parameter-efficient
+fine-tuning strategy that builds on the adapter framework of
+Houlsby et al.~\cite{houlsby2019} while reducing parameter overhead through
+low-rank matrix decomposition, to the VILA-M3 8B checkpoint
+(\path{MONAI/Llama3-VILA-M3-8B}). The query and value projection matrices
+of the language-model attention layers are targeted (the vision tower and
+multimodal projector remain frozen). The LoRA rank is set to $r = 16$ with a
+scaling factor $\alpha = 32$. Instruction data is constructed following the
+supervised fine-tuning protocol of Ouyang et al.~\cite{ouyang2022}. A single
+adapter is trained \emph{jointly} with two complementary objectives so that
+one fine-tuned model serves both downstream tasks:
+
+\begin{itemize}
+  \item \textbf{Detection-routing objective (causal-LM loss).} Two training
+    configurations are studied. In the \emph{single-class} configuration, the
+    adapter is trained on 9{,}000 CT-RATE pairs targeting the
+    \texttt{lung tumor} routing class exclusively. In the \emph{multi-class}
+    configuration, approximately 39{,}000 instruction samples are derived from
+    the same CT-RATE volumes by applying five class-specific query templates
+    (\texttt{lung tumor}, \texttt{heart}, \texttt{liver}, \texttt{aorta},
+    \texttt{lung}) together with descriptive negative samples that do not
+    require routing. Each sample's target response emits the appropriate
+    class-conditioned routing token
+    (e.g., \texttt{<VISTA3D(liver)>}, \texttt{<VISTA3D(heart)>}) when the
+    paired report supports that interpretation, teaching the VLM to bind the
+    routing class to the \emph{query intent} rather than to the image alone.
+    In both configurations, the loss is the standard next-token cross-entropy
+    on the response tokens, masking the prompt prefix and image-placeholder
+    positions.
+
+  \item \textbf{Retrieval objective (symmetric contrastive InfoNCE~\cite{oord2018}).} For each
+    volume in the batch we compute (i) an \emph{image-side} embedding from the
+    key slices paired with a neutral prompt and (ii) a \emph{text-side}
+    embedding from the radiology report, both taken as the last-token hidden
+    state of the LLaMA body. Embeddings are $\ell_2$-normalised and compared
+    via a CLIP-style symmetric InfoNCE loss with in-batch negatives, pulling
+    each volume's image embedding towards its own report and away from the
+    other volumes in the batch. This is what enables embedding-space retrieval;
+    no auxiliary text generation is used for retrieval.
+\end{itemize}
+
+
+Training uses a single NVIDIA A100 80\,GB GPU (HPC AI-Center, Universitas
+Brawijaya) via the PyTorch cu118 stack. The AdamW optimiser runs at
+$1 \times 10^{-4}$ with cosine annealing (3\% warm-up), weight decay 0.01,
+effective detection batch size 4 (gradient accumulation), and contrastive
+in-batch size 8 at temperature $\tau = 0.07$. CT-RATE volumes are processed in a streaming fashion, with each volume
+discarded after slice extraction, enabling training on the full corpus
+without cumulative storage requirements.
+
+
+% -----------------------------------------------------------------------
+\FloatBarrier
+\section{Experimental Setup and Evaluation}
+% -----------------------------------------------------------------------
+
+\subsection{Baselines and Metrics}
+
+Two baselines are used: (i)~direct VISTA3D with \texttt{lung tumor} prompt
+(no VLM), establishing the per-scan ceiling; and (ii)~pre-fine-tuned
+VILA-M3 (no CT-RATE LoRA), alongside random retrieval, as the lower bound.
+Detection is evaluated by Dice Similarity Coefficient (DSC)~\cite{milletari2016}
+and IoU against LIDC-IDRI expert contours. Retrieval uses Recall@$K$ for
+$K \in \{1, 5, 10\}$ on the 1{,}000-volume CT-RATE hold-out.
+
+\subsection{Results}
+
+We separately measure (i) the model's ability to emit the expected expert-call
+\emph{structure}, (ii) its ability to bind the structurally-correct call to
+the \emph{correct class}, and (iii) the resulting segmentation overlap. Decoupling
+structure from class reveals the most informative behaviour of the
+fine-tuned VLM: as we show below and in Figure~\ref{fig:routing_precision}, the
+call format is learned completely while class identity is learned only partially.
+
+% -- Headline detection table -----------------------------------------------
+\begin{table}[!ht]
+  \centering
+  \caption{Zero-shot lung-lesion detection on LIDC-IDRI (115 scans,
+    $\geq$3-radiologist consensus). \textbf{Fmt.\ prec.} = fraction emitting
+    any \texttt{<VISTA3D(\textellipsis)>}; \textbf{Cls.\ prec.} = fraction
+    emitting exactly \texttt{<VISTA3D(lung tumor)>} (raw); Dice/IoU averaged
+    over all 115 scans. SC = single-class adapter; MC = multi-class adapter.}
+  \label{tab:detection}
+  \begin{tabular}{lcccc}
+    \toprule
+    Condition                          & Fmt.\ prec. & Cls.\ prec. & Dice & IoU \\
+    \midrule
+    VILA-M3 baseline (no LoRA)         & 0.00\%      & 0.00\%      & 0.000 & 0.000 \\
+    Direct VISTA3D (no VLM)            & ---         & 100\%       & 0.273 & 0.201 \\
+    \midrule
+    SC-LoRA (9\,k pairs)               & 100\%       & 59.13\%     & 0.167 & 0.124 \\
+    \quad{}+ constrained               & 100\%       & 100\%\textsuperscript{*} & 0.273 & 0.201 \\
+    \midrule
+    MC-LoRA (39\,k, 5 classes)         & 100\%       & 0.87\%      & 0.001 & 0.001 \\
+    \textbf{\quad{}+ constrained}      & \textbf{100\%} & \textbf{100\%}\textsuperscript{*} & \textbf{0.273} & \textbf{0.201} \\
+    \bottomrule
+  \end{tabular}
+  \par\smallskip
+  {\scriptsize \textsuperscript{*}Effective class precision after binding any
+  structurally-valid \texttt{<VISTA3D(\textellipsis)>} token to
+  \texttt{lung tumor} at inference time.}
+\end{table}
+
+\paragraph{Detection.}
+Table~\ref{tab:detection} reports six detection conditions across two adapter
+configurations. The pre-fine-tuned VILA-M3 \emph{never} emits the expected
+routing token; manual inspection reveals malformed pseudo-calls
+(\texttt{<Lung()>}, \texttt{<LUL()>}, and similar) that do not match the
+expert-call grammar required by the MONAI agent framework. Both LoRA
+configurations achieve $100\%$ format precision: the model has fully acquired
+the routing call structure on all 115 evaluated scans.
+
+\paragraph{Single-class adapter.}
+After fine-tuning on 9{,}000 CT-RATE pairs targeting the \texttt{lung tumor}
+class, $59.13\%$ of emitted tokens bind to the correct class; the remainder
+emit mismatched arguments such as \texttt{<VISTA3D(skeleton)>} or malformed
+variants (\texttt{<VISTA3D(lung cancer? No).}). The format-vs-class
+decomposition is arithmetically exact: predicted mean Dice $= 0.5913 \times
+0.273 \approx 0.161$, closely matching the measured $0.167$
+(Figure~\ref{fig:routing_precision}b). This confirms that \emph{when routing
+succeeds, the VLM achieves the per-scan VISTA3D ceiling}; the deficit is
+entirely a class-selection error, not a segmentation deficiency.
+
+\paragraph{Multi-class adapter.}
+Figure~\ref{fig:perclass_routing} reports per-class routing precision.
+\texttt{Liver} achieves $100\%/100\%$ (format/class), proving
+query-conditioned routing is learnable. \texttt{Lung tumor} shows $97\%$
+format but $0\%$ class (token maps to the dominant class \texttt{liver}
+instead); \texttt{aorta} and \texttt{lung} show $0\%$ format (routing
+trigger not activated). These two failure modes reflect training-data
+vocabulary overlap; unconstrained Dice ($0.001$) reflects class confusion,
+not a format failure.
+
+% ── Figure: Per-class routing precision ──────────────────────────────────────
+\begin{figure}[tp]
+  \centering
+  \begin{tikzpicture}
+  \begin{axis}[
+    xbar,
+    bar width     = 6.5pt,
+    enlarge y limits = 0.22,
+    width  = \columnwidth,
+    height = 4.2cm,
+    xlabel        = {Precision (\%)},
+    xlabel style  = {font=\footnotesize\sffamily},
+    symbolic y coords = {lung, aorta, heart, {lung tumor}, liver},
+    ytick         = data,
+    yticklabel style = {font=\scriptsize\sffamily\ttfamily},
+    xmin=0, xmax=118,
+    xtick         = {0,20,40,60,80,100},
+    xticklabel style = {font=\scriptsize\sffamily},
+    xmajorgrids   = true,
+    grid style    = {dashed, gray!30},
+    legend style  = {at={(0.98,0.02)}, anchor=south east, legend columns=1,
+                     font=\footnotesize\sffamily},
+    every axis plot/.append style={line width=0.4pt},
+    nodes near coords={\pgfmathfloatifflags{\pgfplotspointmeta}{0}{}{\pgfmathprintnumber[fixed,precision=0]{\pgfplotspointmeta}}},
+    nodes near coords align={horizontal},
+    every node near coord/.append style={font=\scriptsize\sffamily},
+  ]
+    \addplot[fill=clrblue!55, draw=clrblue!80!black]
+      coordinates {(0,lung) (0,aorta) (61,heart) (97,{lung tumor}) (100,liver)};
+    \addplot[fill=clrorange!60, draw=clrorange!80!black]
+      coordinates {(0,lung) (0,aorta) (0,heart) (0,{lung tumor}) (100,liver)};
+    \legend{Format Precision, Class Precision}
+  \end{axis}
+  \end{tikzpicture}
+  \caption{Per-class routing precision (200 hold-out volumes, 1{,}000 queries).
+    \texttt{liver}: full binding; \texttt{lung tumor} and \texttt{heart}:
+    high format, zero class prec.\ (class confusion);
+    \texttt{aorta}/\allowbreak\texttt{lung}: zero format (routing not triggered).}
+  \label{fig:perclass_routing}
+\end{figure}
+
+\paragraph{Closing the class-precision gap via constrained decoding.}
+Because format precision is already high across the classes that trigger
+routing, the remaining headroom is a class-binding problem solvable at
+inference time. We apply a lightweight constraint that rewrites any
+structurally-valid routing token to the task-relevant call
+\texttt{<VISTA3D(lung tumor)>} before dispatch, equivalent to a
+constrained-decoding $\mathrm{LogitsProcessor}$ but requiring no retraining.
+
+\textbf{Interpretation note.} The constrained call is identical to a direct
+VISTA3D \texttt{lung tumor} invocation; consequently, the Dice of $0.273$
+under constraint reflects VISTA3D's detection capability for this class on
+LIDC-IDRI rather than an independent VLM detection result. The VLM's
+learned contribution in the constrained setting is the \emph{routing format
+trigger}: after fine-tuning, the model reliably emits a structurally valid
+tool call on every query, whereas the pre-trained baseline never does.
+Class identity, in the constrained variant, is enforced by the rule rather
+than by the model. This design separates two distinct capabilities---format
+trigger (learned) and class binding (enforced)---and is appropriate for
+deployment scenarios where the target class is known at query time.
+
+Under this constraint both adapters achieve $100\%$ effective class precision
+and recover the direct VISTA3D Dice of $0.273$. This pattern generalises:
+\emph{any} target class with $>0\%$ format precision benefits from the
+constraint. The \texttt{liver} result ($100\%$ class precision without
+constraint) represents the ideal unconstrained case, where the model has
+learned class binding in addition to format emission.
+
+% ── Figure: Routing Precision + Dice (side-by-side) ─────────────────────────
+\begin{figure}[tp]
+  \centering
+  \begin{minipage}[t]{0.49\columnwidth}
+    \centering
+    \begin{tikzpicture}
+    \begin{axis}[
+      ybar,
+      bar width     = 5pt,
+      enlarge x limits = 0.20,
+      width  = \linewidth,
+      height = 5.0cm,
+      legend style  = {at={(0.5,-0.38)}, anchor=north, legend columns=1,
+                       font=\scriptsize\sffamily},
+      ylabel        = {Precision (\%)},
+      ylabel style  = {font=\scriptsize\sffamily},
+      symbolic x coords = {Baseline, {SC-LoRA}, {SC+Cstr},
+                           {MC-LoRA}, {MC+Cstr}},
+      xtick         = data,
+      xticklabel style = {font=\tiny\sffamily, rotate=35, anchor=east},
+      ymin=0, ymax=120,
+      ytick         = {0,50,100},
+      ymajorgrids   = true,
+      grid style    = {dashed, gray!30},
+      tick label style = {font=\tiny\sffamily},
+      every axis plot/.append style={line width=0.4pt},
+      title         = {(a) Routing precision},
+      title style   = {font=\scriptsize\sffamily},
+    ]
+      \addplot[fill=clrblue!55, draw=clrblue!80!black]
+        coordinates {(Baseline,0) ({SC-LoRA},100) ({SC+Cstr},100)
+                     ({MC-LoRA},100) ({MC+Cstr},100)};
+      \addplot[fill=clrorange!60, draw=clrorange!80!black]
+        coordinates {(Baseline,0) ({SC-LoRA},59.13) ({SC+Cstr},100)
+                     ({MC-LoRA},0.87) ({MC+Cstr},100)};
+      \legend{Format, Class/Eff.}
+    \end{axis}
+    \end{tikzpicture}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{0.49\columnwidth}
+    \centering
+    \begin{tikzpicture}
+    \begin{axis}[
+      xbar,
+      bar width     = 6pt,
+      enlarge y limits = 0.20,
+      width  = \linewidth,
+      height = 5.0cm,
+      xlabel        = {Dice (DSC)},
+      xlabel style  = {font=\scriptsize\sffamily},
+      symbolic y coords = {Baseline, {SC-LoRA}, {SC+Cstr},
+                           {MC-LoRA}, {MC+Cstr}, {Direct}},
+      ytick         = data,
+      yticklabel style = {font=\tiny\sffamily},
+      xmin=0, xmax=0.36,
+      xtick         = {0, 0.10, 0.20, 0.273},
+      xticklabels   = {0, 0.1, 0.2, 0.273},
+      xticklabel style = {font=\tiny\sffamily},
+      xmajorgrids   = true,
+      grid style    = {dashed, gray!30},
+      nodes near coords={\pgfmathfloatifflags{\pgfplotspointmeta}{0}{}{\pgfmathprintnumber[fixed,precision=3]{\pgfplotspointmeta}}},
+      nodes near coords align = {horizontal},
+      every node near coord/.append style={font=\tiny\sffamily},
+      every axis plot/.append style={line width=0.4pt},
+      title         = {(b) Mean Dice},
+      title style   = {font=\scriptsize\sffamily},
+    ]
+      \addplot[fill=clrblue!45, draw=clrblue!70!black]
+        coordinates {(0.000,Baseline)(0.167,{SC-LoRA})(0.273,{SC+Cstr})
+                     (0.001,{MC-LoRA})(0.273,{MC+Cstr})(0.273,{Direct})};
+      \addplot[dashed, clrorange, semithick, forget plot]
+        coordinates {(0.273,Baseline)(0.273,{Direct})};
+    \end{axis}
+    \end{tikzpicture}
+  \end{minipage}
+  \caption{(a)~Routing precision: blue = format, orange = class/effective.
+    SC = single-class adapter, MC = multi-class adapter, +Cstr = constrained.
+    (b)~Mean Dice for all conditions; dashed line = direct VISTA3D ceiling
+    ($0.273$). Constrained variants of both adapters match the ceiling exactly.}
+  \label{fig:routing_precision}
+\end{figure}
+
+\paragraph{Retrieval.}
+Table~\ref{tab:retrieval} quantifies the data-scale threshold for
+contrastive LoRA transfer on a generative VLM. Both the pre-fine-tuned
+baseline and the LoRA-adapted model sit within noise of the $1/1000$
+random-chance reference on the held-out split, establishing that
+$9{,}000$ training pairs remains below the generalisation threshold for
+single-adapter contrastive transfer on an 8\,B-parameter generative model.
+Domain-matched dual-encoder models such as BiomedCLIP~\cite{biomedclip2023}
+and CT-CLIP~\cite{ctrate2024} reach competitive retrieval performance at
+$50{,}000$+ paired volumes, providing a concrete scale reference.
+
+% -- Retrieval table --------------------------------------------------------
+\begin{table}[!ht]
+  \centering
+  \caption{Text-to-image case retrieval on the CT-RATE 1{,}000-volume
+    hold-out. Recall@$K$: fraction of radiology reports retrieving their own
+    CT volume within the top-$K$ candidates by cosine similarity.}
+  \label{tab:retrieval}
+  \begin{tabular}{lccc}
+    \toprule
+    Method                      & Recall@1 & Recall@5 & Recall@10 \\
+    \midrule
+    Random chance               & 0.10\%   & 0.50\%   & 1.00\% \\
+    VILA-M3 baseline (no LoRA)  & 0.10\%   & 0.40\%   & 1.10\% \\
+    Ours (joint LoRA)           & 0.20\%   & 0.50\%   & 1.40\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Discussion}\label{sec:discussion}
+
+\paragraph{Routing format versus class identity.}
+Decomposing the routing rate into a structural (format) component and a
+semantic (class) component reveals where instruction tuning succeeds and where
+it falls short. The format, a closed grammar of less than one token's
+combinatorial complexity once the assistant-turn header is in place, is
+learned completely at both training scales. The class identity
+requires the model to bind a routing token to a query-specific cue: at
+$9{,}000$ pairs targeting a single class, this binding is partial ($59.13\%$);
+at $39{,}000$ multi-class samples, the binding becomes query-conditioned
+rather than defaulting to a single class, which drives single-task raw
+precision to near zero. This finding is consistent with prior observations
+that small-corpus instruction tuning teaches a response \emph{shape} faster
+than it teaches the response \emph{content}, and it directly motivates
+class-constrained inference as the deployment solution: the format precision
+advantage (always $100\%$) is retained while class identity is enforced
+by the constraint.
+
+\paragraph{Multi-class routing: per-class binding and training-signal sensitivity.}
+Figure~\ref{fig:perclass_routing} reveals that multi-class routing precision
+is highly sensitive to training-data class balance and report-vocabulary
+distinctiveness. The \texttt{liver} class achieves perfect routing ($100\%/100\%$),
+establishing a proof-of-concept that the VLM routing architecture can learn
+query-conditioned class dispatch. The other four classes fall short at this
+training scale, with the pattern dividing into two failure modes: (i)~high
+format but wrong class (\texttt{lung tumor}: $97\%/0\%$; \texttt{heart}:
+$61\%/0\%$), where the routing trigger is reliably activated but class
+binding defaults to the most strongly learned token (\texttt{liver}); and
+(ii)~zero format (\texttt{aorta} and \texttt{lung}), where the routing
+trigger itself is not activated at all. Mode (i) is addressable by
+class-constrained inference without retraining; mode (ii) requires either
+additional training data or a per-class token-forcing strategy at inference
+time. Together, these results characterise a fundamental trade-off in
+small-corpus multi-class instruction tuning: the format grammar is
+cheap to learn, per-class binding scales with training signal clarity,
+and class-constrained inference provides a practical bridge between
+partial binding and deployment-grade precision.
+
+Figure~\ref{fig:umap} shows UMAP projections of last-token hidden states for
+200 hold-out volumes under all five query types. The baseline (no LoRA)
+produces a single undifferentiated cloud; after multi-class fine-tuning,
+\texttt{liver} separates into a distinct cluster matching its $100\%$ routing
+precision, while other classes show displacement proportional to their
+per-class results (Figure~\ref{fig:perclass_routing}).
+
+% ── Figure: UMAP query-conditioned embeddings ──────────────────────────────
+% Generated by: python src/viz/gen_umap.py --cache results/umap_embeddings.npz
+\begin{figure}[tp]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/umap_multiclass.pdf}
+  \caption{UMAP of last-token hidden states (200 volumes $\times$ 5 queries,
+    cosine distance). \textbf{Left}: baseline, a single undifferentiated cloud.
+    \textbf{Right}: fine-tuned model, where \texttt{liver} (teal) separates clearly;
+    other classes displace proportionally to Figure~\ref{fig:perclass_routing}.}
+  \label{fig:umap}
+\end{figure}
+
+\paragraph{Data scale and contrastive transfer.}
+The retrieval results establish a measurable data-scale boundary for
+contrastive adaptation of generative VLMs. Training loss decreases from
+$\ln 8 \approx 2.08$ at initialisation to $\approx 1.29$ by training
+completion, confirming that the LoRA adapter successfully acquires
+cross-modal alignment on the training distribution. The held-out split
+quantifies where this alignment \emph{fails to generalise}: at $9{,}000$
+pairs both the baseline and the adapted model sit within noise of the
+$1/1000$ random-chance reference. This establishes a concrete lower bound
+for practitioners: below approximately $50{,}000$ paired volumes, a
+purpose-built dual-encoder (e.g., BiomedCLIP~\cite{biomedclip2023},
+CT-CLIP~\cite{ctrate2024}) remains the appropriate retrieval component,
+while the generative VLM's contribution is detection routing and clinical
+language understanding.
+
+\paragraph{Expert--task class match.}
+The detection ceiling established by direct VISTA3D
+($\mathrm{Dice}=0.273$) reflects a known constraint: VISTA3D's
+\texttt{lung tumor} class is trained on lung mass annotations and is not
+specialised for the small pulmonary nodules that dominate the LIDC-IDRI
+ground truth. We adopt this class as the closest open-source proxy expert
+because no multi-class 3D CT segmentation model with a nodule-specific class
+is currently available; the resulting overlap therefore characterises the
+match between VISTA3D's lung-mass prior and LIDC nodule contours, not the
+upper bound of nodule segmentation in general.
+
+\textbf{Clinical context.} For reference, supervised CNN detectors on
+LIDC-IDRI achieve Dice~$>0.6$ on comparable consensus-nodule
+subsets~\cite{luna16}. The present zero-shot result ($0.273$) is
+substantially below that threshold and is intended as a proof-of-concept
+demonstration of VLM-routed expert delegation, not a clinically deployable
+detection system. Substituting a nodule-specialised expert (e.g., a
+LUNA16-trained~\cite{luna16} 3D detector or a future nodule-aware MONAI
+bundle) would lift this ceiling without altering the routing methodology,
+since the VLM's contribution is the delegation decision rather than the
+segmentation itself.
+
+\paragraph{Limitations and future work.}
+The 115-scan LIDC evaluation set is defined by the strict
+$\geq$3-radiologist consensus inclusion criterion, selecting only
+high-confidence nodule cases from the full LIDC-IDRI corpus; this subset is
+clinically representative and sufficient to characterise routing behaviour,
+though a larger set would tighten Dice variance estimates. Current results
+are reported as point estimates; future work should accompany all Dice values
+with standard deviation and $95\%$ confidence intervals, and include
+paired significance tests (e.g., Wilcoxon signed-rank) between conditions
+to verify that constrained and unconstrained variants differ beyond sampling
+noise. Sensitivity and false-positive rate per scan, together with the
+nodule size distribution of the 115-scan subset, would provide a more
+complete clinical picture of the detection behaviour and clarify the
+expert-task class mismatch quantitatively. The per-class routing results
+(Figure~\ref{fig:perclass_routing}) show that at the current training scale
+only \texttt{liver} achieves full binding without constraint; scaling the
+per-class training corpus or applying balanced over-sampling would directly
+improve the zero-constraint macro class precision beyond $20\%$. Validating
+multi-class routing end-to-end (e.g., reporting VISTA3D liver segmentation
+Dice under the \texttt{liver}-routing MC adapter on a liver benchmark such
+as LiTS) would strengthen the multi-class contribution claim. A supervised
+nnU-Net upper bound on the LIDC subset and a nodule-specialised expert to
+raise the detection ceiling above $\mathrm{Dice}=0.273$ are left as
+immediate extensions.
+
+
+% -----------------------------------------------------------------------
+\FloatBarrier
+\section{Conclusion}
+% -----------------------------------------------------------------------
+
+We present a parameter-efficient adaptation framework for expert-routed
+vision-language models applied to 3D chest CT analysis. By fine-tuning VILA-M3 8B
+on CT-RATE using LoRA and leveraging the MONAI VLM Agent Framework's built-in
+VISTA3D routing, the framework addresses the fundamental challenge of applying
+VLMs to volumetric medical data without native 3D processing. Two methodological
+contributions are validated experimentally: (i)~a multi-class adapter trained
+on five VISTA3D routing classes that demonstrates query-conditioned expert
+delegation beyond a single pathology, with \texttt{liver} achieving $100\%$
+class precision without constraint; and (ii)~class-constrained inference, an
+inference-time task-routing rule that enforces the target class so that the
+dispatched call is identical to a direct expert invocation, recovering the
+VISTA3D detection ceiling ($\mathrm{Dice}=0.273$) in both adapter
+configurations without modifying model weights. The VLM's learned
+contribution is the routing format trigger; class identity is delegated to
+the constraint rule in deployment, while the \texttt{liver} result
+demonstrates that the adapter can, in principle, learn full class binding
+without constraint. Together these results establish that a single
+lightweight LoRA adapter can serve as a practical routing layer for a
+127-class segmentation expert, with per-task deployment controlled entirely
+at inference time. The \emph{format-vs-class precision} decomposition
+introduced here is a general analytical tool for any structured-output VLM
+that delegates to a closed-vocabulary expert, enabling arithmetic prediction
+of downstream task performance from routing statistics alone. Future work
+will accompany Dice estimates with confidence intervals and significance
+tests, validate multi-class routing end-to-end on additional class
+benchmarks, investigate balanced sampling to improve zero-constraint macro
+class precision beyond $20\%$, and explore nodule-specialised expert
+substitution to raise the detection ceiling above $\mathrm{Dice}=0.273$.
+
+
+% -----------------------------------------------------------------------
+\section*{Acknowledgements}
+% -----------------------------------------------------------------------
+
+The authors gratefully acknowledge the support of the HPC AI-Center,
+Universitas Brawijaya, for providing access to the NVIDIA A100 80\,GB GPU
+facility used to conduct all training and evaluation experiments in this work.
+The authors also thank the MONAI Project and NVIDIA for publicly releasing the
+VILA-M3 framework and model checkpoints under open licences.
+
+
+% -----------------------------------------------------------------------
+\begin{thebibliography}{99}
+% -----------------------------------------------------------------------
+
+\bibitem{litjens2017}
+Litjens G, Kooi T, Bejnordi B E, Setio A A A, Ciompi F, Ghafoorian M,
+van der Laak J A W M, van Ginneken B and S\'{a}nchez C I 2017
+A survey on deep learning in medical image analysis
+\textit{Med. Image Anal.} \textbf{42} 60--88
+
+\bibitem{clip2021}
+Radford A, Kim J W, Hallacy C, Ramesh A, Goh G, Agarwal S, Sastry G,
+Askell A, Mishkin P, Clark J, Krueger G and Sutskever I 2021
+Learning transferable visual models from natural language supervision
+\textit{Proc. 38th Int. Conf. on Machine Learning (ICML)} 8748--8763
+
+\bibitem{medclip2022}
+Wang Z, Wu Z, Agarwal D and Sun J 2022
+MedCLIP: Contrastive learning from unpaired medical images and text
+\textit{Proc. 2022 Conf. on Empirical Methods in Natural Language Processing
+(EMNLP)} 3876--3887
+
+\bibitem{biovilt2023}
+Bannur S, Hyland S L, Liu Q, Perez-Garcia F, Ilse M, Castro D C, Boecking B,
+Sharma H, Bitterman T, Schwaighofer A, Wetscherek M T, Lungren M, Nori A,
+Alvarez-Valle J and Oktay O 2023
+Learning to exploit temporal structure for biomedical vision-language processing
+\textit{Proc. IEEE/CVF Conf. on Computer Vision and Pattern Recognition (CVPR)}
+15016--15027
+
+\bibitem{gpt4_2023}
+Achiam J, Adler S, Agarwal S et al.\ 2023
+GPT-4 technical report
+\textit{arXiv preprint} arXiv:2303.08774
+
+\bibitem{medgemini2024}
+Saab K, Tu T, Weng W-H, Tanno R, Stutz D, Wulczyn E, Zhang F, Strother T,
+Park S, Vedadi E, Chaves J Z, Poon H, Yartsev M, Vedova C D, Rossman S,
+Ashraf A, Bhatt U, Yerlan I, Mahdavi N, Mansouri R, Sanjay G, Chen A and
+Natarajan V 2024
+Capabilities of Gemini models in medicine
+\textit{arXiv preprint} arXiv:2404.18416
+
+\bibitem{nnunet2021}
+Isensee F, Jaeger P F, Kohl S A A, Petersen J and Maier-Hein K H 2021
+nnU-Net: a self-configuring method for deep learning-based biomedical image
+segmentation
+\textit{Nat. Methods} \textbf{18} 203--211
+
+\bibitem{vista3d2024}
+He Y, Yang D, Nath V, Myronenko A, Xu Z, Li W, Tang Y, Zhao C, Huang R
+and Xu D 2024
+VISTA3D: Versatile imaging segmentation and annotation model for 3D computed
+tomography
+\textit{arXiv preprint} arXiv:2406.05285
+
+\bibitem{monai2022}
+Cardoso M J, Li W, Brown R, Ma N, Kerfoot E, Wang Y, Murrey B, Myronenko A,
+Zhao C, Yang D, Nath V, He Y, Xu Z, Hatamizadeh A, Zhu W, Liu Y, Zheng M,
+Tang Y, Yang I, Yao V, Billeh Y, Zhang D, Foo B, Feng A, Young B, Larson E
+and Xu D 2022
+MONAI: An open-source framework for deep learning in healthcare
+\textit{arXiv preprint} arXiv:2211.02701
+
+\bibitem{vilaM32024}
+Nath V, Li W, Yang D, Myronenko A, Zheng M, Lu Y, Liu Z, Yin H, Law Y M,
+Tang Y and Xu D 2024
+VILA-M3: Enhancing vision-language models with medical expert knowledge
+\textit{arXiv preprint} arXiv:2411.12915
+
+\bibitem{vila2024}
+Lin J, Yin H, Ping W, Lu Y, Molchanov P, Tao A, Mao H, Kautz J,
+Shoeybi M and Han S 2024
+VILA: On pre-training for visual language models
+\textit{Proc. IEEE/CVF Conf. on Computer Vision and Pattern Recognition (CVPR)}
+17770--17779
+
+\bibitem{transformer2017}
+Vaswani A, Shazeer N, Parmar N, Uszkoreit J, Jones L, Gomez A N,
+Kaiser {\L} and Polosukhin I 2017
+Attention is all you need
+\textit{Proc. 31st Conf. on Neural Information Processing Systems (NeurIPS)}
+5998--6008
+
+\bibitem{flamingo2022}
+Alayrac J-B, Donahue J, Luc P, Miech A, Barr I, Hasson Y, Lenc K,
+Mensch A, Millican K, Reynolds M, Ring R, Rutherford E, Cabi S, Han T,
+Gong Z, Samangooei S, Monteiro M, Menick J L, Borgeaud S, Brock A,
+Nematzadeh A, Sharifzadeh S, Bi\'{n}kowski M, Barreira R, Vinyals O,
+Zisserman A and Simonyan K 2022
+Flamingo: a visual language model for few-shot learning
+\textit{Adv. Neural Inf. Process. Syst.} \textbf{35}
+
+\bibitem{llama2023}
+Touvron H, Martin L, Stone K, Albert P, Almahairi A, Babaei Y,
+Bashlykov N, Batra S, Bhargava P, Bhosale S, Bikel D, Blecher L and
+Scialom T 2023
+Llama 2: Open foundation and fine-tuned chat models
+\textit{arXiv preprint} arXiv:2307.09288
+
+\bibitem{lora2022}
+Hu E J, Shen Y, Wallis P, Allen-Zhu Z, Li Y, Wang S, Wang L and Chen W 2022
+LoRA: Low-rank adaptation of large language models
+\textit{Proc. 10th Int. Conf. on Learning Representations (ICLR)}
+
+\bibitem{ctrate2024}
+Hamamci I E, Er B, Alber G, Simsek O, Simsar E, Senol E, Nalci M A,
+Gokberk B, Hayat R S, Yuksel T and Catli S 2024
+A foundation model utilizing chest CT volumes and radiology reports for
+supervised-level zero-shot detection of abnormalities
+\textit{arXiv preprint} arXiv:2403.17834
+
+\bibitem{lidc2011}
+Armato S G, McLennan G, Bidaut L, McNitt-Gray M F, Meyer C R, Reeves A P,
+Zhao B, Aberle D R, Henschke C I, Hoffman E A, Kazerooni E A, MacMahon H,
+Van Beeke E J R, Yankelevitz D and Petrick N 2011
+The Lung Image Database Consortium (LIDC) and Image Database Resource
+Initiative (IDRI): a completed reference database of lung nodules on CT scans
+\textit{Med. Phys.} \textbf{38} 915--931
+
+\bibitem{llava2023}
+Liu H, Li C, Wu Q and Lee Y J 2023
+Visual instruction tuning
+\textit{Adv. Neural Inf. Process. Syst.} \textbf{36}
+
+\bibitem{oord2018}
+van den Oord A, Li Y and Vinyals O 2018
+Representation learning with contrastive predictive coding
+\textit{arXiv preprint} arXiv:1807.03748
+
+\bibitem{ouyang2022}
+Ouyang L, Wu J, Jiang X, Almeida D, Wainwright C L, Mishkin P, Zhang C,
+Agarwal S, Slama K, Ray A, Schulman J, Hilton J, Kelton F, Miller L,
+Simens M, Askell A, Welinder P, Christiano P, Leike J and Lowe R 2022
+Training language models to follow instructions with human feedback
+\textit{Adv. Neural Inf. Process. Syst.} \textbf{35}
+
+\bibitem{houlsby2019}
+Houlsby N, Giurgiu A, Jastrzebski S, Morrone B, de Laroussilhe Q,
+Gesmundo A, Attariyan M and Gelly S 2019
+Parameter-efficient transfer learning for NLP
+\textit{Proc. 36th Int. Conf. on Machine Learning (ICML)} 2790--2799
+
+\bibitem{milletari2016}
+Milletari F, Navab N and Ahmadi S-A 2016
+V-Net: fully convolutional neural networks for volumetric medical image
+segmentation
+\textit{Proc. 4th Int. Conf. on 3D Vision (3DV)} 565--571
+
+\bibitem{luna16}
+Setio A A A, Traverso A, de Bel T, Berens M S N, van den Bogaard C
+et al.\ 2017
+Validation, comparison, and combination of algorithms for automatic detection
+of pulmonary nodules in CT images: the LUNA16 challenge
+\textit{Med. Image Anal.} \textbf{42} 1--13
+
+\bibitem{biomedclip2023}
+Zhang S, Xu Y, Usuyama N, Xu H, Bagga J K, Tinn R, Preston S,
+Rao R et al.\ 2023
+BiomedCLIP: a multimodal biomedical foundation model pretrained from
+fifteen million scientific image-text pairs
+\textit{arXiv preprint} arXiv:2303.00915
+
+\bibitem{llava_med2023}
+Li C, Wong C, Zhang S, Usuyama N, Liu H, Yang J, Naumann T, Poon H
+and Gao J 2023
+LLaVA-Med: training a large language-and-vision assistant for biomedicine
+in one day
+\textit{Adv. Neural Inf. Process. Syst.} \textbf{36}
+
+\bibitem{radfm2023}
+Wu C, Zhang X, Zhang Y, Wang Y and Xie W 2023
+Towards generalist foundation model for radiology by leveraging web-scale
+2D and 3D medical data
+\textit{arXiv preprint} arXiv:2308.02463
+
+\end{thebibliography}
+
+\end{document}

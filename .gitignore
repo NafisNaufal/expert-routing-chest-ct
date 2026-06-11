@@ -50,8 +50,9 @@ results/
 .ipynb_checkpoints/
 *.ipynb
 
-# ── Paper directory (only the final compiled PDF is tracked) ─────────────────
+# ── Paper directory (source + compiled PDF tracked; figures/cls/etc ignored) ──
 paper/*
+!paper/main.tex
 !paper/main paper.pdf
 
 # ── OS ────────────────────────────────────────────────────────────────────────
