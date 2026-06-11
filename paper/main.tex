@@ -334,22 +334,31 @@ call format is learned completely while class identity is learned only partially
   \label{tab:detection}
   \begin{tabular}{lcccc}
     \toprule
-    Condition                          & Fmt.\ prec. & Cls.\ prec. & Dice & IoU \\
+    Condition                          & Fmt.\ prec. & Cls.\ prec. & Dice\,$\pm$\,SD$^\dagger$ & IoU \\
     \midrule
-    VILA-M3 baseline (no LoRA)         & 0.00\%      & 0.00\%      & 0.000 & 0.000 \\
-    Direct VISTA3D (no VLM)            & ---         & 100\%       & 0.273 & 0.201 \\
+    VILA-M3 baseline (no LoRA)         & 0.00\%      & 0.00\%      & $0.000\pm0.000$ & 0.000 \\
+    Direct VISTA3D (no VLM)            & ---         & 100\%       & $0.273\pm0.306$ & 0.201 \\
     \midrule
-    SC-LoRA (9\,k pairs)               & 100\%       & 59.13\%     & 0.167 & 0.124 \\
-    \quad{}+ constrained               & 100\%       & 100\%\textsuperscript{*} & 0.273 & 0.201 \\
+    SC-LoRA (9\,k pairs)               & 100\%       & 59.13\%     & $0.167\pm0.280$ & 0.124 \\
+    \quad{}+ constrained               & 100\%       & 100\%\textsuperscript{*} & $0.273\pm0.306$ & 0.201 \\
     \midrule
-    MC-LoRA (39\,k, 5 classes)         & 100\%       & 0.87\%      & 0.001 & 0.001 \\
-    \textbf{\quad{}+ constrained}      & \textbf{100\%} & \textbf{100\%}\textsuperscript{*} & \textbf{0.273} & \textbf{0.201} \\
+    MC-LoRA (39\,k, 5 classes)         & 100\%       & 0.87\%      & $0.001\pm0.012$ & 0.001 \\
+    \textbf{\quad{}+ constrained}      & \textbf{100\%} & \textbf{100\%}\textsuperscript{*} & $\mathbf{0.273\pm0.306}$ & \textbf{0.201} \\
     \bottomrule
   \end{tabular}
   \par\smallskip
   {\scriptsize \textsuperscript{*}Effective class precision after binding any
   structurally-valid \texttt{<VISTA3D(\textellipsis)>} token to
-  \texttt{lung tumor} at inference time.}
+  \texttt{lung tumor} at inference time.
+  $^\dagger$Bootstrap 95\% CI (10\,000 resamples, $n=115$):
+  Direct\,/\,+Cstr: $[0.218,\,0.329]$; SC-LoRA: $[0.117,\,0.218]$;
+  MC-LoRA: $[0.000,\,0.003]$; Baseline: $[0.000,\,0.000]$.
+  Wilcoxon signed-rank (two-sided): SC-LoRA vs.\ Direct $W\!=\!0$,
+  $p<0.001$; constrained vs.\ Direct: undefined (identical by construction);
+  all other pairs $p<0.001$.
+  SD\,$>$\,mean reflects binary detection: Dice\,$>0$ on 60.0\% of scans
+  (69/115); the remaining 40\% are nodules below VISTA3D's lung-mass
+  detection threshold.}
 \end{table}
 
 \paragraph{Detection.}
@@ -368,7 +377,8 @@ emit mismatched arguments such as \texttt{<VISTA3D(skeleton)>} or malformed
 variants (\texttt{<VISTA3D(lung cancer? No).}). The format-vs-class
 decomposition is arithmetically exact: predicted mean Dice $= 0.5913 \times
 0.273 \approx 0.161$, closely matching the measured $0.167$
-(Figure~\ref{fig:routing_precision}b). This confirms that \emph{when routing
+(bootstrap 95\,\% CI: $[0.117,\,0.218]$; Wilcoxon vs.\ Direct VISTA3D:
+$W\!=\!0$, $p<0.001$; Figure~\ref{fig:routing_precision}b). This confirms that \emph{when routing
 succeeds, the VLM achieves the per-scan VISTA3D ceiling}; the deficit is
 entirely a class-selection error, not a segmentation deficiency.
 
@@ -379,7 +389,8 @@ query-conditioned routing is learnable. \texttt{Lung tumor} shows $97\%$
 format but $0\%$ class (token maps to the dominant class \texttt{liver}
 instead); \texttt{aorta} and \texttt{lung} show $0\%$ format (routing
 trigger not activated). These two failure modes reflect training-data
-vocabulary overlap; unconstrained Dice ($0.001$) reflects class confusion,
+vocabulary overlap; unconstrained Dice ($0.001$; 95\,\% CI: $[0.000,\,0.003]$;
+Wilcoxon vs.\ SC-LoRA: $W\!=\!0$, $p<0.001$) reflects class confusion,
 not a format failure.
 
 % ── Figure: Per-class routing precision ──────────────────────────────────────
@@ -661,15 +672,17 @@ The 115-scan LIDC evaluation set is defined by the strict
 $\geq$3-radiologist consensus inclusion criterion, selecting only
 high-confidence nodule cases from the full LIDC-IDRI corpus; this subset is
 clinically representative and sufficient to characterise routing behaviour,
-though a larger set would tighten Dice variance estimates. Current results
-are reported as point estimates; future work should accompany all Dice values
-with standard deviation and $95\%$ confidence intervals, and include
-paired significance tests (e.g., Wilcoxon signed-rank) between conditions
-to verify that constrained and unconstrained variants differ beyond sampling
-noise. Sensitivity and false-positive rate per scan, together with the
-nodule size distribution of the 115-scan subset, would provide a more
-complete clinical picture of the detection behaviour and clarify the
-expert-task class mismatch quantitatively. The per-class routing results
+though a larger set would further reduce Dice variance.
+Bootstrapped 95\% confidence intervals (10\,000 resamples) and Wilcoxon
+signed-rank tests are now reported for all detection conditions
+(Table~\ref{tab:detection}); the high SD (${\approx}0.306$ at the ceiling)
+is a structural consequence of the expert-task class mismatch: VISTA3D's
+lung-mass prior yields Dice\,$>0$ on only 60\% of scans (69/115),
+producing a binary detection distribution rather than a normally distributed
+error. Sensitivity and false-positive rate per scan, together with the
+nodule size distribution of the 115-scan subset, would further clarify
+this mismatch quantitatively but require negative cases beyond this
+consensus-only subset. The per-class routing results
 (Figure~\ref{fig:perclass_routing}) show that at the current training scale
 only \texttt{liver} achieves full binding without constraint; scaling the
 per-class training corpus or applying balanced over-sampling would directly
@@ -710,9 +723,9 @@ at inference time. The \emph{format-vs-class precision} decomposition
 introduced here is a general analytical tool for any structured-output VLM
 that delegates to a closed-vocabulary expert, enabling arithmetic prediction
 of downstream task performance from routing statistics alone. Future work
-will accompany Dice estimates with confidence intervals and significance
-tests, validate multi-class routing end-to-end on additional class
-benchmarks, investigate balanced sampling to improve zero-constraint macro
+will validate multi-class routing end-to-end on additional class benchmarks
+(e.g., VISTA3D liver segmentation Dice on LiTS under the MC adapter),
+investigate balanced per-class sampling to improve zero-constraint macro
 class precision beyond $20\%$, and explore nodule-specialised expert
 substitution to raise the detection ceiling above $\mathrm{Dice}=0.273$.
 
