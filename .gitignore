@@ -50,10 +50,13 @@ results/
 .ipynb_checkpoints/
 *.ipynb
 
-# ── Paper directory (source + compiled PDF tracked; figures/cls/etc ignored) ──
+# ── Paper directory ───────────────────────────────────────────────────────────
 paper/*
 !paper/main.tex
-!paper/main paper.pdf
+!paper/sn-jnl.cls
+!paper/sn-mathphys-num.bst
+!paper/figures/
+!paper/figures/*.pdf
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
