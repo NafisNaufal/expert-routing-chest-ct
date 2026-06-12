@@ -28,7 +28,7 @@ Usage
 # First run (extracts embeddings — ~30-60 min on A100):
 python src/viz/gen_umap.py \\
     --config  configs/train_config_multiclass.yaml \\
-    --holdout ~/icsdg_data/processed_multiclass/ctrate_holdout.json \\
+    --holdout ~/erct_data/processed_multiclass/ctrate_holdout.json \\
     --lora    ./checkpoints_multiclass/lora_adapter_final \\
     --n       200 \\
     --output  paper/figures/umap_multiclass.pdf \\
@@ -85,7 +85,7 @@ CLASS_MARKERS = {
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config",   default="configs/train_config_multiclass.yaml")
-    p.add_argument("--holdout",  default="~/icsdg_data/processed_multiclass/ctrate_holdout.json")
+    p.add_argument("--holdout",  default="~/erct_data/processed_multiclass/ctrate_holdout.json")
     p.add_argument("--vila_repo",default="./VLM-Radiology-Agent-Framework")
     p.add_argument("--model",    default="MONAI/Llama3-VILA-M3-8B")
     p.add_argument("--lora",     default="./checkpoints_multiclass/lora_adapter_final")

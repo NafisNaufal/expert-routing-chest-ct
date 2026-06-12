@@ -23,7 +23,7 @@ asked.
 Usage:
     python src/eval/eval_routing_multiclass.py \\
         --config configs/train_config_multiclass.yaml \\
-        --holdout_json ~/icsdg_data/processed_multiclass/ctrate_holdout.json \\
+        --holdout_json ~/erct_data/processed_multiclass/ctrate_holdout.json \\
         --lora_adapter ./checkpoints_multiclass/lora_adapter_final \\
         --output_json results/multiclass_routing.json
 """
@@ -63,7 +63,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config",       default="configs/train_config_multiclass.yaml")
     p.add_argument("--holdout_json",
-                   default="~/icsdg_data/processed_multiclass/ctrate_holdout.json")
+                   default="~/erct_data/processed_multiclass/ctrate_holdout.json")
     p.add_argument("--vila_repo",    default="./VLM-Radiology-Agent-Framework")
     p.add_argument("--model_path",   default="MONAI/Llama3-VILA-M3-8B")
     p.add_argument("--lora_adapter",

@@ -18,9 +18,9 @@ lora:
 # ── Data ─────────────────────────────────────────────────────────────────────
 # NOTE: edit these to a partition with free space (server has ~241 GB total).
 data:
-  ctrate_root: "~/icsdg_data/ct_rate"          # CT-RATE report CSVs + staging
-  lidc_root: "~/icsdg_data/lidc_idri"          # LIDC-IDRI volumes (NIfTI, kept for eval)
-  processed_root: "~/icsdg_data/processed"     # extracted slices + JSON records
+  ctrate_root: "~/erct_data/ct_rate"          # CT-RATE report CSVs + staging
+  lidc_root: "~/erct_data/lidc_idri"          # LIDC-IDRI volumes (NIfTI, kept for eval)
+  processed_root: "~/erct_data/processed"     # extracted slices + JSON records
   holdout_fraction: 0.10                       # fraction of CT-RATE kept for retrieval eval
   max_volumes: 10000                           # CT-RATE train volumes to stream+process
   max_lidc_scans: 150                          # LIDC-IDRI scans for zero-shot eval

@@ -21,8 +21,8 @@ Requires the report/metadata CSVs from download_ctrate.py.
 Usage:
     export HF_TOKEN=your_token_here
     python src/data/prepare_ctrate.py \
-        --ctrate_root ~/icsdg_data/ct_rate \
-        --output_root ~/icsdg_data/processed \
+        --ctrate_root ~/erct_data/ct_rate \
+        --output_root ~/erct_data/processed \
         --max_volumes 2000
 """
 
@@ -209,8 +209,8 @@ def make_retrieval_record(volume_id, slice_paths, findings) -> dict:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--ctrate_root", default="~/icsdg_data/ct_rate")
-    p.add_argument("--output_root", default="~/icsdg_data/processed")
+    p.add_argument("--ctrate_root", default="~/erct_data/ct_rate")
+    p.add_argument("--output_root", default="~/erct_data/processed")
     p.add_argument("--hf_token", default=None)
     p.add_argument("--max_volumes", type=int, default=10000)
     p.add_argument("--workers", type=int, default=8,

@@ -10,7 +10,7 @@
 # drag in its own (cu12-oriented) version pins.
 set -e
 
-CONDA_ENV="icsdg"
+CONDA_ENV="erct"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VILA_FRAMEWORK="$PROJECT_ROOT/VLM-Radiology-Agent-Framework"
 VILA_REPO="$VILA_FRAMEWORK/thirdparty/VILA"
@@ -76,7 +76,7 @@ fi
 
 # ── 7. Data directories (keep everything on the 241GB data disk) ──────────────
 # EDIT DATA_ROOT to point at the partition with free space on your server.
-DATA_ROOT="${ICSDG_DATA_ROOT:-$HOME/icsdg_data}"
+DATA_ROOT="${ERCT_DATA_ROOT:-$HOME/erct_data}"
 echo "==> Creating data directories under $DATA_ROOT"
 mkdir -p "$DATA_ROOT/ct_rate" "$DATA_ROOT/lidc_idri" "$DATA_ROOT/processed"
 

@@ -51,7 +51,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/train_config.yaml")
     p.add_argument("--holdout_json",
-                   default="~/icsdg_data/processed/ctrate_holdout.json")
+                   default="~/erct_data/processed/ctrate_holdout.json")
     p.add_argument("--output_json",
                    default="results/biomedclip_retrieval.json")
     p.add_argument("--save_embeddings", default=None,

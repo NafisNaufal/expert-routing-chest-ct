@@ -32,9 +32,9 @@ lora:
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 data:
-  ctrate_root: "~/icsdg_data/ct_rate"
-  lidc_root: "~/icsdg_data/lidc_idri"
-  processed_root: "~/icsdg_data/processed_multiclass"     # ← multi-class data
+  ctrate_root: "~/erct_data/ct_rate"
+  lidc_root: "~/erct_data/lidc_idri"
+  processed_root: "~/erct_data/processed_multiclass"     # ← multi-class data
   holdout_fraction: 0.10
   max_volumes: 9000
   max_lidc_scans: 150

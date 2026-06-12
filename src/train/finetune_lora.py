@@ -20,7 +20,7 @@ worth, not the sum.
 Usage:
     python src/train/finetune_lora.py \
         --config configs/train_config.yaml \
-        --data_path ~/icsdg_data/processed/ctrate_train.json \
+        --data_path ~/erct_data/processed/ctrate_train.json \
         --vila_repo ./VLM-Radiology-Agent-Framework
 """
 
@@ -292,7 +292,7 @@ def contrastive_loss(model, tokenizer, batch, temperature, device):
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/train_config.yaml")
-    p.add_argument("--data_path", default="~/icsdg_data/processed/ctrate_train.json")
+    p.add_argument("--data_path", default="~/erct_data/processed/ctrate_train.json")
     p.add_argument("--vila_repo", default="./VLM-Radiology-Agent-Framework")
     return p.parse_args()
 

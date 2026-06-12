@@ -19,8 +19,8 @@ A voxel is positive in the consensus mask if >=3 of 4 radiologists contoured it.
 
 Usage:
     python src/data/prepare_lidc.py \
-        --lidc_root ~/icsdg_data/lidc_idri \
-        --output_root ~/icsdg_data/processed \
+        --lidc_root ~/erct_data/lidc_idri \
+        --output_root ~/erct_data/processed \
         --max_scans 150
 """
 
@@ -94,8 +94,8 @@ def build_consensus_mask(scan, vol_shape: tuple) -> np.ndarray:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--lidc_root", default="~/icsdg_data/lidc_idri")
-    p.add_argument("--output_root", default="~/icsdg_data/processed")
+    p.add_argument("--lidc_root", default="~/erct_data/lidc_idri")
+    p.add_argument("--output_root", default="~/erct_data/processed")
     p.add_argument("--max_scans", type=int, default=150)
     p.add_argument("--max_slices", type=int, default=16)
     p.add_argument("--slice_size", type=int, default=224)

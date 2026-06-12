@@ -12,7 +12,7 @@ CT-RATE is gated — set HF_TOKEN (or pass --hf_token) after accepting the terms
 
 Usage:
     export HF_TOKEN=your_token_here
-    python src/data/download_ctrate.py --output ~/icsdg_data/ct_rate
+    python src/data/download_ctrate.py --output ~/erct_data/ct_rate
 """
 
 import argparse
@@ -27,7 +27,7 @@ REPO_ID = "ibrahimhamamci/CT-RATE"
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--output", type=str, default="~/icsdg_data/ct_rate")
+    p.add_argument("--output", type=str, default="~/erct_data/ct_rate")
     p.add_argument("--hf_token", type=str, default=None)
     return p.parse_args()
 

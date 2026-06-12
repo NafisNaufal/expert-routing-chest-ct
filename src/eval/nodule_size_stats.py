@@ -9,8 +9,8 @@ IDs extracted from the NIfTI filenames in the nifti directory.
 
 Usage:
     python src/eval/nodule_size_stats.py \
-        --nifti_dir ~/icsdg_data/lidc_idri/nifti \
-        --annotations ~/icsdg_data/lidc_idri/nodule_annotations.json \
+        --nifti_dir ~/erct_data/lidc_idri/nifti \
+        --annotations ~/erct_data/lidc_idri/nodule_annotations.json \
         --output_json results/nodule_sizes.json
 """
 
@@ -29,9 +29,9 @@ PATIENT_RE  = re.compile(r"lidc_(LIDC-IDRI-\d+)_")
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--nifti_dir",   default=str(Path.home() / "icsdg_data/lidc_idri/nifti"),
+    ap.add_argument("--nifti_dir",   default=str(Path.home() / "erct_data/lidc_idri/nifti"),
                     help="Directory containing the 115 eval NIfTI volumes.")
-    ap.add_argument("--annotations", default=str(Path.home() / "icsdg_data/lidc_idri/nodule_annotations.json"),
+    ap.add_argument("--annotations", default=str(Path.home() / "erct_data/lidc_idri/nodule_annotations.json"),
                     help="nodule_annotations.json from the LIDC prep pipeline.")
     ap.add_argument("--output_json", default=None)
     args = ap.parse_args()

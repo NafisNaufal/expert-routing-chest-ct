@@ -33,8 +33,8 @@ the single-class pipeline.
 Usage:
     export HF_TOKEN=your_token_here
     python src/data/prepare_ctrate_multiclass.py \\
-        --ctrate_root ~/icsdg_data/ct_rate \\
-        --output_root ~/icsdg_data/processed_multiclass \\
+        --ctrate_root ~/erct_data/ct_rate \\
+        --output_root ~/erct_data/processed_multiclass \\
         --max_volumes 9000
 """
 
@@ -322,8 +322,8 @@ def build_records_for_volume(volume_id: str, slice_paths: list, findings: str,
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--ctrate_root", default="~/icsdg_data/ct_rate")
-    p.add_argument("--output_root", default="~/icsdg_data/processed_multiclass")
+    p.add_argument("--ctrate_root", default="~/erct_data/ct_rate")
+    p.add_argument("--output_root", default="~/erct_data/processed_multiclass")
     p.add_argument("--hf_token", default=None)
     p.add_argument("--max_volumes", type=int, default=9000)
     p.add_argument("--workers", type=int, default=8)
@@ -332,7 +332,7 @@ def parse_args():
     p.add_argument("--holdout_fraction", type=float, default=0.10)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--reuse_slices_from",
-                   default="~/icsdg_data/processed",
+                   default="~/erct_data/processed",
                    help="If set, reuse already-extracted slices from this "
                         "directory instead of re-downloading volumes. Falls "
                         "back to streaming download when slices are missing.")

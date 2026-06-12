@@ -23,13 +23,13 @@ Usage:
     # Baseline (no fine-tuning)
     python src/eval/eval_retrieval.py \
         --config configs/train_config.yaml \
-        --holdout_json ~/icsdg_data/processed/ctrate_holdout.json \
+        --holdout_json ~/erct_data/processed/ctrate_holdout.json \
         --output_json results/baseline_retrieval.json
 
     # Fine-tuned model
     python src/eval/eval_retrieval.py \
         --config configs/train_config.yaml \
-        --holdout_json ~/icsdg_data/processed/ctrate_holdout.json \
+        --holdout_json ~/erct_data/processed/ctrate_holdout.json \
         --lora_adapter ./checkpoints/lora_adapter_final \
         --output_json results/finetuned_retrieval.json
 """
@@ -138,7 +138,7 @@ def compute_recall_at_k(query_emb, index_emb, query_ids, index_ids, k_values):
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/train_config.yaml")
-    p.add_argument("--holdout_json", default="~/icsdg_data/processed/ctrate_holdout.json")
+    p.add_argument("--holdout_json", default="~/erct_data/processed/ctrate_holdout.json")
     p.add_argument("--lora_adapter", default=None,
                    help="Path to a saved LoRA adapter; omit for the baseline")
     p.add_argument("--output_json", default="results/retrieval_results.json")
