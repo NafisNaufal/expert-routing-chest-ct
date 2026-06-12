@@ -51,12 +51,7 @@ results/
 *.ipynb
 
 # ── Paper directory ───────────────────────────────────────────────────────────
-paper/*
-!paper/main.tex
-!paper/sn-jnl.cls
-!paper/sn-mathphys-num.bst
-!paper/figures/
-!paper/figures/*.pdf
+paper/
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
